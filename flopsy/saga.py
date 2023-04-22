@@ -52,6 +52,7 @@ class saga:
 
         if self.states is None:
             self.states = self.owning_class.store_attrs
-
-        self.owning_class._store_sagas.append((self, self.states))
+        saga_id = self.owning_class._next_saga_id
+        self.owning_class._next_saga_id += 1
+        self.owning_class._store_sagas.append((saga_id, self, self.states))
 

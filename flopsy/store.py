@@ -25,9 +25,12 @@ class Store:
     application's stores. Defaults to "id"
     """
     _store_registry = {}
-    _store_on_dispatch = {}
-    _store_after_dispatch = []
+    _store_reducers = {}
+    _store_sagas = []
     _store_tasks = []
+
+    _next_saga_id = 1
+    _next_reducer_id = 1
 
     @classmethod
     def _setter_helper(cls, attr):
@@ -74,13 +77,11 @@ class Store:
         return getattr(self, label)
 
     async def dispatch(self, action):
-        handlers = self._store_on_dispatch.get(action.type_name, [])
-        print(f"dispatch: enter, {action.type_name} {handlers}")
+        handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
-        for state_name, cb in handlers:
+        for callback_id, state_name, cb in handlers:
             old_value = getattr(self, state_name)
             new_value = cb(self, action, state_name, old_value)
-            print(f"dispatch: {state_name} {old_value} --> {new_value}")
             setattr(self, state_name, new_value)
             if old_value != new_value:
                 state_diff[state_name] = (old_value, new_value)
@@ -94,9 +95,20 @@ class Store:
                 if old_value != new_value:
                     state_diff[state_name] = (old_value, new_value)
 
-        self.post_dispatch(action, state_diff)
+        changed_state_set = set(state_diff.keys())
+        if not changed_state_set:
+            return
 
-    def launch_task(self, task):
+        for callback_id, callback, state_filter in self._store_sagas:
+            if state_filter and not (set(state_filter) & changed_state_set):
+                continue
+            self._launch_task(
+                self._run_saga(
+                    callback(self, action, state_diff)
+                )
+            )
+
+    def _launch_task(self, task):
         # clean up completed tasks
         Store._store_tasks = [
             t for t in Store._store_tasks
@@ -106,43 +118,50 @@ class Store:
         # save the new one
         Store._store_tasks.append(asyncio.create_task(task))
 
-    async def run_action_generator(self, cb):
-        print("run_action_generator: running {cb}")
-        async for action in cb:
-            print(f"run_action_generator: Got {action} {type(action)}")
+    async def _run_saga(self, saga):
+        async for action in saga:
             if action and isinstance(action, Action):
-                print(f"run_action_generator: Running {action}")
                 await self.dispatch(action)
-
-    def post_dispatch(self, action, state_diff):
-        changed_state_set = set(state_diff.keys())
-        if not changed_state_set:
-            return
-
-        for callback, state_filter in self._store_after_dispatch:
-            if state_filter and not (set(state_filter) & changed_state_set):
-                continue
-            self.launch_task(
-                self.run_action_generator(
-                    callback(self, action, state_diff)
-                )
-            )
 
     # install reducer for states
     @classmethod
-    def on_dispatch(cls, action_name, states):
-        handlers = cls._store_on_dispatch.setdefault(action_name, [])
+    def install_reducer(cls, action_name, states):
+
+        reducer_id = Store._next_reducer_id
+        Store._next_reducer_id += 1
+
+        handlers = cls._store_reducers.setdefault(action_name, [])
         reducer = getattr(cls, f"_{action_name}")
 
         for state in states:
-            handlers.append((state, reducer))
+            handlers.append((reducer_id, state, reducer))
+        return reducer_id
 
     @classmethod
-    def after_dispatch(cls, cb, states=None):
+    def uninstall_reducer(cls, action_name, reducer_id):
+        handlers = cls._store_reducers.setdefault(action_name, [])
+        handlers[:] = [
+            h for h in handlers
+            if h[0] != reducer_id
+        ]
+
+    @classmethod
+    def install_saga(cls, saga, states=None):
+        saga_id = Store._next_saga_id
+        Store._next_saga_id += 1
+
         if not states:
             states = []
 
-        cls._store_after_dispatch.append((cb, states))
+        cls._store_sagas.append((saga_id, saga, states))
+        return saga_id
+
+    @classmethod
+    def uninstall_saga(cls, saga_id):
+        cls._store_sagas = [
+            h for h in cls._store_sagas
+            if h[0] != saga_id
+        ]
 
     @staticmethod
     def all_store_types():

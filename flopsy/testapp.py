@@ -2,6 +2,7 @@ import asyncio
 
 from flopsy.store import SyncedStore
 from flopsy.reducer import reducer
+from flopsy.saga import saga
 
 
 class StateObject(SyncedStore):
@@ -21,56 +22,30 @@ class StateObject(SyncedStore):
         super().__init__()
 
     @reducer
-    def CLEAR_POS(self, action, state, oldval):
+    def clear_pos(self, action, state, oldval):
         return 0
 
-    @reducer
-    def INCR_XPOS(self, action, state, oldval):
+    @reducer('xpos')
+    def incr_xpos(self, action, state, oldval):
         return oldval + 1
 
-    @reducer
-    def INCR_YPOS(self, action, state, oldval):
+    @reducer('ypos')
+    def incr_ypos(self, action, state, oldval):
         return oldval + 1
 
-
-action_history = []
-app_state = {}
-
-
-async def track_state(target, action, state_diff):
-    action_history.append((target, action, state_diff))
-
-    state_key = f"{type(target).__name__}"
-    state_subkey = f"{target.id}"
-
-    type_objects = app_state.setdefault(state_key, {})
-    previous_state = type_objects.setdefault(state_subkey, {})
-
-    if previous_state:
-        state_update = {
-            key: value[1]
-            for key, value in state_diff.items()
-        }
-        previous_state.update(state_update)
-    else:
-        previous_state.update(target.state())
-
-    yield None
+    @saga('xpos')
+    async def drip_incr_x(self, action, state_diff):
+        for _ in range(5):
+            await asyncio.sleep(1)
+            yield self.action(StateObject.INCR_YPOS)
 
 
-async def drip_incr_x(target, action, state_diff):
-    print("drip: enter")
-    for _ in range(5):
-        await asyncio.sleep(1)
-        print("drip: yielding INCR_YPOS")
-        yield target.action(StateObject.INCR_YPOS)
+ss = StateObject()
+inspector = ss.show_inspector()
 
+await ss.action(StateObject.CLEAR_POS).dispatch()
 
-StateObject.on_dispatch(StateObject.CLEAR_POS, [StateObject.XPOS, StateObject.YPOS])
-StateObject.on_dispatch(StateObject.INCR_XPOS, [StateObject.XPOS])
-StateObject.on_dispatch(StateObject.INCR_YPOS, [StateObject.YPOS])
+for i in range(20):
+    await asyncio.sleep(1)
+    await ss.action(StateObject.INCR_YPOS).dispatch()
 
-StateObject.after_dispatch(
-    drip_incr_x, [StateObject.XPOS]
-)
-StateObject.after_dispatch(track_state)

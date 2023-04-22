@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+import json
 from datetime import datetime
 from threading import Thread
 from imgui.integrations.glfw import GlfwRenderer
@@ -9,30 +9,29 @@ import glfw
 import imgui
 from flopsy.store import Store
 
-
 class Inspector(Thread):
-    def __init__(self):
+    def __init__(self, *, width=800, height=600):
         super().__init__()
         self.window_name = "Flopsy inspector"
-        self.window_width = 800
-        self.window_height = 600
+        self.window_width = width
+        self.window_height = height
 
-        self.sagas = []
-
+        self.sagas = {}
         self.timeline = []
+
         for store_type in Store.all_store_types():
-            store_type.after_dispatch(
+            self.sagas[store_type.__name__] = store_type.install_saga(
                 self.update_timeline,
             )
         self.store = Store.store()
 
     async def update_timeline(self, store, action, state_diff):
-        print(f"update_timeline: {store} {action} {state_diff}")
+        print(f"[update_timeline] {store} {action} {state_diff}")
         self.timeline.append([
             datetime.now(),
-            action
+            action,
+            state_diff
         ])
-        print(f"{self.timeline}")
         yield None
 
     def create_glfw_window(self):
@@ -93,6 +92,7 @@ class Inspector(Thread):
             flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_DECORATION
         )
 
+        ########################################
         # timeline
         halfwidth = imgui.get_window_width() * 0.5
         fullheight = imgui.get_window_height()
@@ -102,18 +102,56 @@ class Inspector(Thread):
             "Timeline", closable=False, flags=imgui.WINDOW_NO_COLLAPSE,
         )
         items = [
-            f"{ts.strftime('%H:%M:%S.%f')[:-3]} {action.type_name}"
-            for ts, action in self.timeline
+            (
+                f"{ts.strftime('%H:%M:%S.%f')[:-3]} {action.type_name}",
+                action.target,
+                action.payload,
+                state_diff
+            )
+            for ts, action, state_diff in self.timeline
         ]
-        imgui.listbox("Timeline", 0, items)
+        imgui.begin_child("##timeline-list")
+
+        for counter, item in enumerate(items):
+            i_label, i_target, i_payload, i_state_diff = item
+            if imgui.tree_node(f"{i_label}##{counter}"):
+                imgui.text(f"Store: {type(i_target).__name__}:{i_target.id}")
+                imgui.text(f"{json.dumps(i_payload, indent=4)}")
+
+                if imgui.tree_node(f"State diff##{counter}"):
+                    for store_attr, store_diff in i_state_diff.items():
+                        imgui.text(f"{store_attr}:")
+                        imgui.same_line()
+                        imgui.text(f"{store_diff}")
+                    imgui.tree_pop()
+
+                imgui.tree_pop()
+        imgui.end_child()
+
         imgui.end()
 
+        ########################################
         # store
         imgui.set_next_window_size(halfwidth, fullheight)
         imgui.set_next_window_position(halfwidth, 21)
         imgui.begin(
             "Store", closable=False, flags=imgui.WINDOW_NO_COLLAPSE,
         )
+
+        imgui.begin_child("##store-list")
+        store = Store.store()
+        for store_type, store_objmap in store.items():
+            if imgui.tree_node(store_type):
+                for obj_id, obj_store in store_objmap.items():
+                    if imgui.tree_node(f"{obj_id}"):
+                        for store_attr, store_value in obj_store.items():
+                            imgui.text(f"{store_attr}:")
+                            imgui.same_line()
+                            imgui.text(f"{store_value}")
+                        imgui.tree_pop()
+                imgui.tree_pop()
+        imgui.end_child()
+
         imgui.end()
 
         imgui.end()
