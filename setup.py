@@ -16,7 +16,7 @@ setup(
     download_url = '',
     keywords = ['state-management', 'redux', 'saga'],
     install_requires = [
-        'pyopengl', 'imgui',
+        'pyopengl', 'glfw', 'imgui[glfw]',
     ],
     classifiers = [
         'Development Status :: 3 - Alpha',

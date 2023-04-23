@@ -148,7 +148,7 @@ class Inspector(Thread):
         imgui.begin(
             "Flopsy Inspector",
             closable=False,
-            flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_DECORATION
+            flags=imgui.WINDOW_NO_MOVE| imgui.WINDOW_ALWAYS_AUTO_RESIZE,
         )
 
         ########################################
@@ -160,7 +160,7 @@ class Inspector(Thread):
         imgui.begin(
             "Timeline",
             closable=False,
-            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE,
+            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE|imgui.WINDOW_NO_RESIZE,
         )
         items = [
             (
@@ -183,7 +183,7 @@ class Inspector(Thread):
                 self.update_timeline_selection(counter)
             if opened:
                 imgui.text(f"Store: {type(i_target).__name__}:{i_target.id}")
-                imgui.text(f"{json.dumps(i_payload, indent=4)}")
+                imgui.text(f"Payload: {json.dumps(i_payload, indent=4)}")
 
                 if imgui.tree_node(f"State diff##{counter}"):
                     for store_attr, store_diff in i_state_diff.items():
@@ -204,7 +204,7 @@ class Inspector(Thread):
         imgui.begin(
             "Store",
             closable=False,
-            flags=imgui.WINDOW_NO_COLLAPSE,
+            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE|imgui.WINDOW_NO_RESIZE,
         )
 
         if self.timeline_item_selected is not None:
@@ -225,10 +225,14 @@ class Inspector(Thread):
                             imgui.same_line()
                             item_id = f"{store_type}:{obj_id}:{store_attr}"
                             if self.store_item_selected == item_id:
+                                imgui.push_item_width(
+                                    0.5 * imgui.get_window_width()
+                                )
                                 changed, self.store_item_selected_value = imgui.input_text(
                                     "##store_edit_input",
                                     self.store_item_selected_value
                                 )
+                                imgui.pop_item_width()
                                 imgui.same_line()
                                 if imgui.button("Change"):
                                     self.store_dispatch_change(
@@ -264,6 +268,10 @@ class Inspector(Thread):
             glfw.poll_events()
             impl.process_inputs()
             imgui.new_frame()
+
+            width, height = glfw.get_window_size(window)
+            self.window_width = width
+            self.window_height = height
 
             # hard work
             keep_going = self.imgui_paint()
