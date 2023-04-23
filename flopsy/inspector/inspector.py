@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import json
+import copy
 from datetime import datetime
 from threading import Thread
 from imgui.integrations.glfw import GlfwRenderer
@@ -16,6 +17,8 @@ class Inspector(Thread):
         self.window_width = width
         self.window_height = height
 
+        self.timeline_item_selected = None
+
         self.sagas = {}
         self.timeline = []
 
@@ -23,16 +26,45 @@ class Inspector(Thread):
             self.sagas[store_type.__name__] = store_type.install_saga(
                 self.update_timeline,
             )
-        self.store = Store.store()
+
+        self.initial_store = Store.store()
+        self.current_store = copy.copy(self.initial_store)
 
     async def update_timeline(self, store, action, state_diff):
-        print(f"[update_timeline] {store} {action} {state_diff}")
         self.timeline.append([
             datetime.now(),
             action,
             state_diff
         ])
+        if self.timeline_item_selected is None:
+            store_items = self.current_store.setdefault(store.store_type, {})
+            store_item_content = store_items.setdefault(store.id, {})
+
+            for state_key, values in state_diff.items():
+                store_item_content[state_key] = values[1]
         yield None
+
+    def update_timeline_selection(self, new_position):
+        last_position = self.timeline_item_selected
+        self.timeline_item_selected = new_position
+
+        if last_position is None:
+            self.current_store = copy.copy(self.initial_store)
+            last_position = 0
+
+        if new_position >= last_position:
+            incr = 1
+            new_position += 1
+        else:
+            incr = -1
+
+        for p in range(last_position, new_position, incr):
+            store = self.timeline[p][1].target
+            store_items = self.current_store.setdefault(store.store_type, {})
+            store_item_content = store_items.setdefault(store.id, {})
+            for state_key, values in self.timeline[p][2].items():
+                new_value = values[1] if incr > 0 else values[0]
+                store_item_content[state_key] = new_value
 
     def create_glfw_window(self):
         if not glfw.init():
@@ -65,6 +97,7 @@ class Inspector(Thread):
 
     def imgui_paint(self):
         keep_going = True
+
         # global menu bar
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("File"):
@@ -72,6 +105,13 @@ class Inspector(Thread):
                 clicked, enabled = imgui.menu_item("Clear timeline")
                 if clicked:
                     self.timeline = []
+                    self.current_store = Store.store()
+                    self.timeline_item_selected = None
+
+                clicked, enabled = imgui.menu_item("Follow timeline")
+                if clicked:
+                    self.current_store = Store.store()
+                    self.timeline_item_selected = None
 
                 # Quit
                 clicked, rest = imgui.menu_item("Quit", "Ctrl+Q")
@@ -85,6 +125,7 @@ class Inspector(Thread):
         imgui.set_next_window_size(self.window_width, self.window_height-21)
         imgui.set_next_window_position(0, 21)
         imgui.get_style().window_rounding = 0
+        imgui.style_colors_light()
 
         imgui.begin(
             "Flopsy Inspector",
@@ -99,7 +140,9 @@ class Inspector(Thread):
         imgui.set_next_window_size(halfwidth, fullheight)
         imgui.set_next_window_position(0, 21)
         imgui.begin(
-            "Timeline", closable=False, flags=imgui.WINDOW_NO_COLLAPSE,
+            "Timeline",
+            closable=False,
+            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE,
         )
         items = [
             (
@@ -114,7 +157,13 @@ class Inspector(Thread):
 
         for counter, item in enumerate(items):
             i_label, i_target, i_payload, i_state_diff = item
-            if imgui.tree_node(f"{i_label}##{counter}"):
+            flags = imgui.TREE_NODE_OPEN_ON_DOUBLE_CLICK
+            if self.timeline_item_selected == counter:
+                flags |= imgui.TREE_NODE_SELECTED
+            opened = imgui.tree_node(f"{i_label}##{counter}", flags)
+            if imgui.is_item_clicked():
+                self.update_timeline_selection(counter)
+            if opened:
                 imgui.text(f"Store: {type(i_target).__name__}:{i_target.id}")
                 imgui.text(f"{json.dumps(i_payload, indent=4)}")
 
@@ -139,8 +188,7 @@ class Inspector(Thread):
         )
 
         imgui.begin_child("##store-list")
-        store = Store.store()
-        for store_type, store_objmap in store.items():
+        for store_type, store_objmap in self.current_store.items():
             if imgui.tree_node(store_type):
                 for obj_id, obj_store in store_objmap.items():
                     if imgui.tree_node(f"{obj_id}"):
