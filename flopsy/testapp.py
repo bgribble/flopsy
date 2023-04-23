@@ -1,3 +1,4 @@
+from typing import Optional
 import asyncio
 
 from flopsy.store import SyncedStore
@@ -12,12 +13,13 @@ class StateObject(SyncedStore):
 
     _next_id = 1
 
+    # store attributes
+    xpos: Optional[int] = None
+    ypos: Optional[int] = None
+
     def __init__(self):
         self.id = StateObject._next_id
         StateObject._next_id += 1
-
-        self.xpos = None
-        self.ypos = None
 
         super().__init__()
 

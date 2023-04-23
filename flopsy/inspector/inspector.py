@@ -29,14 +29,11 @@ class Inspector(Thread):
 
         self.event_loop = asyncio.get_event_loop()
 
-        for store_type in Store.all_store_types():
-            self.sagas[store_type.__name__] = store_type.install_saga(
-                self.update_timeline,
-            )
-
         self.initial_store = Store.store()
         self.initial_store_ts = datetime.now()
         self.current_store = copy.copy(self.initial_store)
+
+        self.store_listen()
 
     async def update_timeline(self, store, action, state_diff):
         self.timeline.append([
@@ -51,6 +48,17 @@ class Inspector(Thread):
             for state_key, values in state_diff.items():
                 store_item_content[state_key] = values[1]
         yield None
+
+    def store_listen(self):
+        for store_type in Store.all_store_types():
+            self.sagas[store_type.__name__] = store_type.install_saga(
+                self.update_timeline,
+            )
+
+    def store_unlisten(self):
+        for store_type in Store.all_store_types():
+            store_type.uninstall_saga(self.sagas[store_type.__name__])
+            del self.sagas[store_type.__name__]
 
     def store_dispatch_change(self, store_type, store_id, attr, value):
         store = Store.find_store(store_type, store_id)
@@ -135,6 +143,7 @@ class Inspector(Thread):
                 clicked, rest = imgui.menu_item("Quit", "Ctrl+Q")
                 if clicked:
                     keep_going = False
+                    self.store_unlisten()
                 imgui.end_menu()
 
             imgui.end_main_menu_bar()
