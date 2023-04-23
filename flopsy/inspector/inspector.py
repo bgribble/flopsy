@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import asyncio
 import json
 import copy
 from datetime import datetime
@@ -8,7 +9,9 @@ from imgui.integrations.glfw import GlfwRenderer
 import OpenGL.GL as gl
 import glfw
 import imgui
+from flopsy.action import Action
 from flopsy.store import Store
+
 
 class Inspector(Thread):
     def __init__(self, *, width=800, height=600):
@@ -18,9 +21,13 @@ class Inspector(Thread):
         self.window_height = height
 
         self.timeline_item_selected = None
+        self.store_item_selected = None
+        self.store_item_selected_value = None
 
         self.sagas = {}
         self.timeline = []
+
+        self.event_loop = asyncio.get_event_loop()
 
         for store_type in Store.all_store_types():
             self.sagas[store_type.__name__] = store_type.install_saga(
@@ -28,6 +35,7 @@ class Inspector(Thread):
             )
 
         self.initial_store = Store.store()
+        self.initial_store_ts = datetime.now()
         self.current_store = copy.copy(self.initial_store)
 
     async def update_timeline(self, store, action, state_diff):
@@ -43,6 +51,15 @@ class Inspector(Thread):
             for state_key, values in state_diff.items():
                 store_item_content[state_key] = values[1]
         yield None
+
+    def store_dispatch_change(self, store_type, store_id, attr, value):
+        store = Store.find_store(store_type, store_id)
+        action = Action(
+            target=store,
+            type_name=f"SET_{attr.upper()}",
+            payload=dict(value=value)
+        )
+        asyncio.run_coroutine_threadsafe(action.dispatch(), self.event_loop)
 
     def update_timeline_selection(self, new_position):
         last_position = self.timeline_item_selected
@@ -98,6 +115,7 @@ class Inspector(Thread):
     def imgui_paint(self):
         keep_going = True
 
+        ########################################
         # global menu bar
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("File"):
@@ -184,8 +202,18 @@ class Inspector(Thread):
         imgui.set_next_window_size(halfwidth, fullheight)
         imgui.set_next_window_position(halfwidth, 21)
         imgui.begin(
-            "Store", closable=False, flags=imgui.WINDOW_NO_COLLAPSE,
+            "Store",
+            closable=False,
+            flags=imgui.WINDOW_NO_COLLAPSE,
         )
+
+        if self.timeline_item_selected is not None:
+            ts = self.timeline[self.timeline_item_selected][0]
+        elif self.timeline:
+            ts = self.timeline[-1][0]
+        else:
+            ts = self.initial_store_ts
+        imgui.text(f"Last update: {ts.strftime('%H:%M:%S.%f')[:-3]}")
 
         imgui.begin_child("##store-list")
         for store_type, store_objmap in self.current_store.items():
@@ -195,7 +223,25 @@ class Inspector(Thread):
                         for store_attr, store_value in obj_store.items():
                             imgui.text(f"{store_attr}:")
                             imgui.same_line()
-                            imgui.text(f"{store_value}")
+                            item_id = f"{store_type}:{obj_id}:{store_attr}"
+                            if self.store_item_selected == item_id:
+                                changed, self.store_item_selected_value = imgui.input_text(
+                                    "##store_edit_input",
+                                    self.store_item_selected_value
+                                )
+                                imgui.same_line()
+                                if imgui.button("Change"):
+                                    self.store_dispatch_change(
+                                        store_type, obj_id, store_attr,
+                                        self.store_item_selected_value
+                                    )
+                                    self.store_item_selected = None
+                            else:
+                                selected, _ = imgui.selectable(f"{store_value}")
+                                if selected:
+                                    self.store_item_selected = item_id
+                                    self.store_item_selected_value = str(store_value)
+
                         imgui.tree_pop()
                 imgui.tree_pop()
         imgui.end_child()

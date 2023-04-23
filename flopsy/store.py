@@ -187,6 +187,9 @@ class Store:
                 typereg[obj_id] = obj.state()
         return complete_state
 
+    @staticmethod
+    def find_store(store_type, store_id):
+        return Store._store_registry.get(store_type, {}).get(store_id, None)
 
     @staticmethod
     def show_inspector():
