@@ -116,3 +116,5 @@ You can launch it with `Store.show_inspector()`.
     click "Change". The new value will be dispatched with a `SET_FOO` action,
     which will appear in the timeline.
 
+![Inspector screenshot](https://user-images.githubusercontent.com/1790529/233851385-7013287b-a3d1-4847-a8c2-745131e8f069.png)
+
