@@ -17,6 +17,9 @@ the same:
 * A post-action phase allows *sagas* to view the full store after it
   is updated and dispatch more actions
 
+Flopsy is currently WIP. It works but there are a lot of unexplored
+edges and I'm not sure where it's going to go.
+
 ### Example
 
 Here's how you define a simple state store with all the action
