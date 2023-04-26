@@ -31,6 +31,7 @@ class Store:
 
     _next_saga_id = 1
     _next_reducer_id = 1
+    _next_default_id = 1
 
     @classmethod
     def _setter_helper(cls, attr):
@@ -43,6 +44,9 @@ class Store:
     def __init_subclass__(cls):
         if not hasattr(cls, 'store_attrs'):
             return
+
+        if not hasattr(cls, 'store_type'):
+            cls.store_type = cls.__name__
 
         Store._store_registry[cls.__name__] = {}
 
@@ -62,7 +66,13 @@ class Store:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        id_attr = getattr(self, "store_id_attr", "id")
+        id_attr = getattr(self, "store_id_attr", None)
+        if id_attr is None:
+            id_attr = "id"
+            id_value = Store._next_default_id
+            Store._next_default_id += 1
+            setattr(self, id_attr, id_value)
+
         Store._store_registry[type(self).__name__][getattr(self, id_attr)] = self
 
     def action(self, action_label, **kwargs):
