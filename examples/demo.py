@@ -8,6 +8,9 @@ from flopsy.saga import saga
 class UndoableState(Store):
     store_attrs = ['val', 'undo_position', 'undo_history']
 
+    # actions without reducers
+    ERROR = "error"
+
     def __init__(self):
         self.val = ""
         self.undo_position = None
@@ -18,7 +21,7 @@ class UndoableState(Store):
     @reducer('undo_position')
     def undo(self, action, state, oldval):
         if oldval is None:
-            return 1 
+            return 1
         else:
             return oldval + 1
 
@@ -86,6 +89,11 @@ class UndoableState(Store):
                     value=1
                 )
 
+    @saga
+    async def mk_error(self, action, state_diff):
+        if action.type_name == UndoableState.ERROR:
+            raise ValueError
+        yield
 
 async def main():
     store = UndoableState()
@@ -112,6 +120,8 @@ async def main():
             await store.action(UndoableState.UNDO).dispatch()
         elif line == "!redo":
             await store.action(UndoableState.REDO).dispatch()
+        elif line == "!error":
+            await store.action(UndoableState.ERROR).dispatch()
         else:
             await store.action(UndoableState.SET_VAL, value=line).dispatch()
 

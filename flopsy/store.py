@@ -1,5 +1,7 @@
 
 import asyncio
+import logging
+
 from .action import Action
 
 
@@ -28,6 +30,7 @@ class Store:
     _store_reducers = {}
     _store_sagas = []
     _store_tasks = []
+    _store_logger = None
 
     _next_saga_id = 1
     _next_reducer_id = 1
@@ -73,7 +76,9 @@ class Store:
             Store._next_default_id += 1
             setattr(self, id_attr, id_value)
 
-        Store._store_registry[type(self).__name__][getattr(self, id_attr)] = self
+        Store._store_registry[
+            type(self).__name__
+        ][getattr(self, id_attr)] = self
 
     def action(self, action_label, **kwargs):
         return Action(self, action_label, kwargs)
@@ -106,8 +111,6 @@ class Store:
                     state_diff[state_name] = (old_value, new_value)
 
         changed_state_set = set(state_diff.keys())
-        if not changed_state_set:
-            return
 
         for callback_id, callback, state_filter in self._store_sagas:
             if state_filter and not (set(state_filter) & changed_state_set):
@@ -129,9 +132,12 @@ class Store:
         Store._store_tasks.append(asyncio.create_task(task))
 
     async def _run_saga(self, saga):
-        async for action in saga:
-            if action and isinstance(action, Action):
-                await self.dispatch(action)
+        try:
+            async for action in saga:
+                if action and isinstance(action, Action):
+                    await self.dispatch(action)
+        except Exception as e:
+            Store.log(f"Exception in saga {saga}: {e}")
 
     # install reducer for states
     @classmethod
@@ -207,6 +213,13 @@ class Store:
         inspector = Inspector()
         inspector.start()
         return inspector
+
+    @staticmethod
+    def log(*args):
+        if not Store._store_logger:
+            Store._store_logger = logging.getLogger(__name__)
+        Store._store_logger.error(*args)
+
 
 class SyncedStore (Store):
     """

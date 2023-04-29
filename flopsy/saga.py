@@ -43,15 +43,13 @@ class saga:
         self.action_name = func.__name__.upper()
         self.method_name = '_' + self.action_name
 
-    # __set_name__ gets called because @reducer is a "descriptor",
+    # __set_name__ gets called because @saga is a "descriptor",
     # at the right time in the init process
     def __set_name__(self, owner, name):
         self.owning_class = owner
         setattr(owner, self.method_name, self.func)
         setattr(owner, self.action_name, self.action_name)
 
-        if self.states is None:
-            self.states = self.owning_class.store_attrs
         saga_id = self.owning_class._next_saga_id
         self.owning_class._next_saga_id += 1
         self.owning_class._store_sagas.append((saga_id, self, self.states))
