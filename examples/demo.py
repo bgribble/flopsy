@@ -9,7 +9,7 @@ class UndoableState(Store):
     store_attrs = ['val', 'undo_position', 'undo_history']
 
     # actions without reducers
-    ERROR = "error"
+    ERROR = "ERROR"
 
     def __init__(self):
         self.val = ""
@@ -71,7 +71,7 @@ class UndoableState(Store):
         if action.type_name in (UndoableState.UNDO, UndoableState.REDO):
             new_position = state_diff[UndoableState.UNDO_POSITION][1]
 
-            if new_position is None:
+            if new_position is None or new_position > len(self.undo_history):
                 return
 
             yield self.action(
@@ -96,13 +96,15 @@ class UndoableState(Store):
         yield
 
 async def main():
+    Store.show_inspector()
+    await asyncio.sleep(0.5)
     store = UndoableState()
 
     time_to_quit = False
 
     print()
     print("Enter a value to change the stored state")
-    print("Enter '!undo' to undo, '!redo' to redo, '!i' to show inspector, '!q' to quit\n")
+    print("Enter '!error' to generate an error, '!undo' to undo, '!redo' to redo, '!i' to show inspector, '!q' to quit\n")
 
     while not time_to_quit:
         print(f"current state: '{store.val}'")

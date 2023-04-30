@@ -14,7 +14,7 @@ from flopsy.store import Store
 
 
 class Inspector(Thread):
-    def __init__(self, *, width=800, height=600):
+    def __init__(self, *, event_loop=None, width=800, height=600):
         super().__init__()
         self.window_name = "Flopsy inspector"
         self.window_width = width
@@ -27,7 +27,7 @@ class Inspector(Thread):
         self.sagas = {}
         self.timeline = []
 
-        self.event_loop = asyncio.get_event_loop()
+        self.event_loop = event_loop or asyncio.get_event_loop()
 
         self.initial_store = Store.store()
         self.initial_store_ts = datetime.now()
@@ -36,29 +36,30 @@ class Inspector(Thread):
         self.store_listen()
 
     async def update_timeline(self, store, action, state_diff):
-        self.timeline.append([
-            datetime.now(),
-            action,
-            state_diff
-        ])
-        if self.timeline_item_selected is None:
-            store_items = self.current_store.setdefault(store.store_type, {})
-            store_item_content = store_items.setdefault(store.id, {})
+        if action not in [t[1] for t in self.timeline]:
+            self.timeline.append([
+                datetime.now(),
+                action,
+                state_diff
+            ])
+            if self.timeline_item_selected is None:
+                store_items = self.current_store.setdefault(store.store_type, {})
+                store_item_content = store_items.setdefault(store.id, {})
 
-            for state_key, values in state_diff.items():
-                store_item_content[state_key] = values[1]
+                for state_key, values in state_diff.items():
+                    store_item_content[state_key] = values[1]
         yield None
 
     def store_listen(self):
         for store_type in Store.all_store_types():
-            self.sagas[store_type.__name__] = store_type.install_saga(
+            self.sagas[store_type.store_type] = store_type.install_saga(
                 self.update_timeline,
             )
 
     def store_unlisten(self):
         for store_type in Store.all_store_types():
-            store_type.uninstall_saga(self.sagas[store_type.__name__])
-            del self.sagas[store_type.__name__]
+            store_type.uninstall_saga(self.sagas[store_type.store_type])
+            del self.sagas[store_type.store_type]
 
     def store_dispatch_change(self, store_type, store_id, attr, value):
         store = Store.find_store(store_type, store_id)
@@ -191,7 +192,7 @@ class Inspector(Thread):
             if imgui.is_item_clicked():
                 self.update_timeline_selection(counter)
             if opened:
-                imgui.text(f"Store: {type(i_target).__name__}:{i_target.id}")
+                imgui.text(f"Store: {type(i_target).store_type}:{i_target.id}")
                 imgui.text(f"Payload: {json.dumps(i_payload, indent=4)}")
 
                 if imgui.tree_node(f"State diff##{counter}"):
@@ -226,9 +227,15 @@ class Inspector(Thread):
 
         imgui.begin_child("##store-list")
         for store_type, store_objmap in self.current_store.items():
+            if not store_objmap:
+                continue
             if imgui.tree_node(store_type):
                 for obj_id, obj_store in store_objmap.items():
-                    if imgui.tree_node(f"{obj_id}"):
+                    store_object = Store.find_store(store_type, obj_id)
+                    obj_node_name = f"{obj_id}"
+                    if (desc := store_object.description()):
+                        obj_node_name += f" ({desc})"
+                    if imgui.tree_node(obj_node_name):
                         for store_attr, store_value in obj_store.items():
                             imgui.text(f"{store_attr}:")
                             imgui.same_line()

@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import threading
 
 from .action import Action
 
@@ -25,16 +26,27 @@ class Store:
     store_id_attr: the attribute to use as a type-unique
     id for the store, to be used when aggregating the
     application's stores. Defaults to "id"
+
     """
     _store_registry = {}
     _store_reducers = {}
     _store_sagas = []
     _store_tasks = []
+    _store_types = {}
+
+    _store_asyncio_thread = None
+    _store_asyncio_event_loop = None
+
     _store_logger = None
+    _store_merged_attrs = []
 
     _next_saga_id = 1
     _next_reducer_id = 1
     _next_default_id = 1
+
+    store_attrs = []
+
+    STORE_INIT = "STORE_INIT"
 
     @classmethod
     def _setter_helper(cls, attr):
@@ -45,15 +57,22 @@ class Store:
         return inner
 
     def __init_subclass__(cls):
-        if not hasattr(cls, 'store_attrs'):
-            return
-
-        if not hasattr(cls, 'store_type'):
+        if "store_type" not in cls.__dict__:
             cls.store_type = cls.__name__
 
-        Store._store_registry[cls.__name__] = {}
+        Store._store_registry[cls.store_type] = {}
+        if cls.store_type not in Store._store_types:
+            Store._store_types[cls.store_type] = cls
 
-        for attr in cls.store_attrs:
+        all_store_attrs = [a for a in cls.__dict__.get('store_attrs', [])]
+        for parent_cls in cls.mro():
+            if 'store_attrs' in parent_cls.__dict__:
+                for attr in parent_cls.__dict__['store_attrs']:
+                    all_store_attrs.append(attr)
+
+        cls._store_merged_attrs = all_store_attrs
+
+        for attr in cls._store_merged_attrs:
             setter_action = f"SET_{attr.upper()}"
             setter_methodname = f"_{setter_action}"
             setter_dispatch = cls._setter_helper(attr)
@@ -77,8 +96,16 @@ class Store:
             setattr(self, id_attr, id_value)
 
         Store._store_registry[
-            type(self).__name__
+            type(self).store_type
         ][getattr(self, id_attr)] = self
+
+        # STORE_INIT lets this new store get picked up
+        # by the inspector
+        self._launch_task(
+            self.dispatch(
+                Action(self, Store.STORE_INIT, {})
+            )
+        )
 
     def action(self, action_label, **kwargs):
         return Action(self, action_label, kwargs)
@@ -87,9 +114,16 @@ class Store:
         if not label:
             return {
                 attr: getattr(self, attr)
-                for attr in self.store_attrs
+                for attr in self._store_merged_attrs
             }
         return getattr(self, label)
+
+    def description(self):
+        """
+        Return a short piece of text to describe the store
+        Displayed in the inspector along with the ID, if implemented
+        """
+        return None
 
     async def dispatch(self, action):
         handlers = self._store_reducers.get(action.type_name, [])
@@ -98,6 +132,7 @@ class Store:
             old_value = getattr(self, state_name)
             new_value = cb(self, action, state_name, old_value)
             setattr(self, state_name, new_value)
+
             if old_value != new_value:
                 state_diff[state_name] = (old_value, new_value)
 
@@ -109,6 +144,14 @@ class Store:
                 state_name, old_value = magic_handler(new_value)
                 if old_value != new_value:
                     state_diff[state_name] = (old_value, new_value)
+
+        # STORE_INIT is magic. This is dispatched when a new store
+        # is created, and it needs a state diff that includes the initial
+        # values of the whole state.
+        if action.type_name == Store.STORE_INIT:
+            initial_state = action.target.state()
+            for key, value in initial_state.items():
+                state_diff[key] = (None, value)
 
         changed_state_set = set(state_diff.keys())
 
@@ -128,8 +171,16 @@ class Store:
             if t and not t.done()
         ]
 
-        # save the new one
-        Store._store_tasks.append(asyncio.create_task(task))
+        # launch the task
+        if threading.get_ident() == Store._store_asyncio_thread:
+            launched = asyncio.create_task(task)
+        else:
+            launched = asyncio.run_coroutine_threadsafe(
+                task, Store._store_asyncio_loop
+            )
+
+        # save the new task for later cleanup
+        Store._store_tasks.append(launched)
 
     async def _run_saga(self, saga):
         try:
@@ -181,11 +232,7 @@ class Store:
 
     @staticmethod
     def all_store_types():
-        stores = []
-        for typename, type_objects in Store._store_registry.items():
-            if len(type_objects):
-                stores.append(type(next(iter(type_objects.values()))))
-        return stores
+        return Store._store_types.values()
 
     @staticmethod
     def all_stores():
@@ -208,9 +255,9 @@ class Store:
         return Store._store_registry.get(store_type, {}).get(store_id, None)
 
     @staticmethod
-    def show_inspector():
+    def show_inspector(event_loop=None):
         from .inspector.inspector import Inspector
-        inspector = Inspector()
+        inspector = Inspector(event_loop=event_loop)
         inspector.start()
         return inspector
 
@@ -219,6 +266,11 @@ class Store:
         if not Store._store_logger:
             Store._store_logger = logging.getLogger(__name__)
         Store._store_logger.error(*args)
+
+    @staticmethod
+    def setup_asyncio():
+        Store._store_asyncio_thread = threading.get_ident()
+        Store._store_asyncio_loop = asyncio.get_event_loop()
 
 
 class SyncedStore (Store):
