@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import threading
+import weakref
 
 from .action import Action
 
@@ -60,7 +61,7 @@ class Store:
         if "store_type" not in cls.__dict__:
             cls.store_type = cls.__name__
 
-        Store._store_registry[cls.store_type] = {}
+        Store._store_registry[cls.store_type] = weakref.WeakValueDictionary()
         if cls.store_type not in Store._store_types:
             Store._store_types[cls.store_type] = cls
 
@@ -95,9 +96,14 @@ class Store:
             Store._next_default_id += 1
             setattr(self, id_attr, id_value)
 
-        Store._store_registry[
-            type(self).store_type
-        ][getattr(self, id_attr)] = self
+        type_name = type(self).store_type
+        type_registry = Store._store_registry.get(type_name)
+        if type_registry is None:
+            Store.log(f"No store registry found for {type_name}, creating")
+            type_registry = weakref.WeakValueDictionary()
+            Store._store_registry[type_name] = type_registry
+
+        type_registry[getattr(self, id_attr)] = self
 
         # STORE_INIT lets this new store get picked up
         # by the inspector
