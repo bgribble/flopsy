@@ -3,7 +3,7 @@
 # build with 'python ./setup.py install'
 from distutils.core import setup
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 
 setup(
     name = 'flopsy',
@@ -13,7 +13,7 @@ setup(
     author = 'Bill Gribble',
     author_email = 'grib@billgribble.com',
     url = 'https://github.com/bgribble/flopsy',
-    download_url = 'https://github.com/bgribble/flopsy/archive/refs/tags/0.0.2.tar.gz',
+    download_url = 'https://github.com/bgribble/flopsy/archive/refs/tags/0.0.3.tar.gz',
     keywords = ['state-management', 'redux', 'saga'],
     install_requires = [
         'pyopengl', 'glfw', 'imgui[glfw]',
