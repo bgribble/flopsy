@@ -1,3 +1,82 @@
+"""
+reducer.py -- @reducer and @mutates decorators for Store methods
+
+@mutates declares that a method will mutate certain state elements.
+The default SET_ reducer will be used.
+
+@reducer declares that a method is a reducer
+"""
+
+import inspect
+
+
+class mutates:
+    """
+    class to be used as a decorator for methods that
+    directly change state. I'm not sure if I like this
+    concept but I'm going to give it a try
+
+    @mutates('myattr')
+    def make_some_changes(self):
+        self.myattr = newvalue
+
+    will dispatch a SET_MYATTR action with newvalue
+    IF newvalue is different from the old value
+    """
+
+    def __init__(self, *states):
+        self.states = states
+
+    async def _async_wrapper(self, target, prev_values, func_awaitable):
+        retval = await func_awaitable
+        for state in self.states:
+            new_value = getattr(target, state)
+            prev_value = prev_values.get(state, None)
+            action = f'SET_{state.upper()}'
+            if new_value != prev_value:
+                await target.dispatch(
+                    target.action(action, value=new_value),
+                    previous=prev_values
+                )
+
+        return retval
+
+    async def _async_completion_helper(self, awaitables):
+        for a in awaitables:
+            await a
+
+    def _sync_wrapper(self, target, prev_values, retval):
+        update_awaitables = []
+        for state in self.states:
+            new_value = getattr(target, state)
+            prev_value = prev_values.get(state, None)
+            action = f'SET_{state.upper()}'
+            if new_value != prev_value:
+                update_awaitables.append(
+                    target.dispatch(
+                        target.action(action, value=new_value),
+                        previous=prev_values
+                    )
+                )
+        target._launch_task(
+            self._async_completion_helper(update_awaitables)
+        )
+        return retval
+
+    def __call__(self, func):
+        def wrapper(instance, *args, **kwargs):
+            prev_states = {
+                s: getattr(instance, s)
+                for s in self.states
+            }
+            retval = func(instance, *args, **kwargs)
+            if any(getattr(instance, s) != prev_states[s] for s in self.states):
+                if inspect.isawaitable(retval):
+                    return self._async_wrapper(instance, prev_states, retval)
+                return self._sync_wrapper(instance, prev_states, retval)
+            return retval
+        return wrapper
+
 
 class reducer:
     """

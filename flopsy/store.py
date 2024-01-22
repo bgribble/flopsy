@@ -30,8 +30,6 @@ class Store:
 
     """
     _store_registry = {}
-    _store_reducers = {}
-    _store_sagas = []
     _store_tasks = []
     _store_types = {}
 
@@ -51,8 +49,10 @@ class Store:
 
     @classmethod
     def _setter_helper(cls, attr):
-        def inner(self, newval):
+        def inner(self, newval, previous=None):
             oldval = getattr(self, attr)
+            if previous:
+                oldval = previous.get(attr, oldval)
             setattr(self, attr, newval)
             return (attr, oldval)
         return inner
@@ -72,6 +72,8 @@ class Store:
                     all_store_attrs.append(attr)
 
         cls._store_merged_attrs = all_store_attrs
+        cls._store_sagas = []
+        cls._store_reducers = {}
 
         for attr in cls._store_merged_attrs:
             setter_action = f"SET_{attr.upper()}"
@@ -131,11 +133,17 @@ class Store:
         """
         return None
 
-    async def dispatch(self, action):
+    async def dispatch(self, action, previous=None):
+        """
+        Dispatch an action to update the store's state
+        """
         handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
+
         for callback_id, state_name, cb in handlers:
             old_value = getattr(self, state_name)
+            if previous:
+                old_value = previous.get(state_name, old_value)
             new_value = cb(self, action, state_name, old_value)
             setattr(self, state_name, new_value)
 
@@ -147,7 +155,7 @@ class Store:
             if hasattr(type(self), magic_handler_name):
                 magic_handler = getattr(self, magic_handler_name)
                 new_value = action.payload.get("value", None)
-                state_name, old_value = magic_handler(new_value)
+                state_name, old_value = magic_handler(new_value, previous=previous)
                 if old_value != new_value:
                     state_diff[state_name] = (old_value, new_value)
 
@@ -177,7 +185,7 @@ class Store:
             if t and not t.done()
         ]
 
-        # launch the task
+        # launch the task, if needed
         if threading.get_ident() == Store._store_asyncio_thread:
             launched = asyncio.create_task(task)
         else:
@@ -193,7 +201,7 @@ class Store:
             async for action in saga:
                 if action and isinstance(action, Action):
                     await self.dispatch(action)
-        except Exception as e:
+        except Exception as e:  # noqa
             Store.log(f"Exception in saga {saga}: {e}")
 
     # install reducer for states
