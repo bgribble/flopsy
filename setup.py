@@ -13,7 +13,7 @@ setup(
     author = 'Bill Gribble',
     author_email = 'grib@billgribble.com',
     url = 'https://github.com/bgribble/flopsy',
-    download_url = f'https://github.com/bgribble/flopsy/archive/refs/tags/{VERSION}.tar.gz',
+    download_url = f'https://github.com/bgribble/flopsy/archive/refs/tags/v{VERSION}.tar.gz',
     keywords = ['state-management', 'redux', 'saga'],
     install_requires = [
         'pyopengl', 'glfw', 'imgui[glfw]',
