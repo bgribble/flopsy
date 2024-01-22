@@ -1,4 +1,4 @@
 from .action import Action
 from .store import Store
-from .reducer import reducer
+from .reducer import mutates, reducer
 from .saga import saga
