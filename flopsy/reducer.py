@@ -92,8 +92,7 @@ class reducer:
         pass
 
     if the reducer has args, they are interpreted as the
-    state elements to run this reducer for. If there are
-    no args it will get run for any state change.
+    state elements that this reducer affects.
     """
     def __init__(self, *args):
         self.owning_class = None

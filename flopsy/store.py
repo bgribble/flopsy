@@ -83,14 +83,17 @@ class Store:
             getter_statename = f"{attr.upper()}"
 
             # define the name as a symbol
-            setattr(cls, setter_action, setter_action)
-            setattr(cls, getter_statename, attr)
+            if not hasattr(cls, setter_action):
+                setattr(cls, setter_action, setter_action)
+
+            if not hasattr(cls, getter_statename):
+                setattr(cls, getter_statename, attr)
 
             # define the setter as a method
-            setattr(cls, setter_methodname, setter_dispatch)
+            if not hasattr(cls, setter_methodname):
+                setattr(cls, setter_methodname, setter_dispatch)
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         id_attr = getattr(self, "store_id_attr", None)
         if id_attr is None:
             id_attr = "id"
@@ -132,6 +135,17 @@ class Store:
         Displayed in the inspector along with the ID, if implemented
         """
         return None
+
+    def store_setter(self, param_name):
+        """
+        Return a bound method that can be called to dispatch a setter
+
+        obj.store_setter(param)(new_value) is equivalent to
+        obj._SET_PARAM(new_value) but doesn't require caller to know
+        how setters are named
+        """
+        setter = getattr(self, f'_SET_{param_name.upper()}')
+        return setter
 
     async def dispatch(self, action, previous=None):
         """
