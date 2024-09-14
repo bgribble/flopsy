@@ -72,8 +72,10 @@ class Store:
                     all_store_attrs.append(attr)
 
         cls._store_merged_attrs = all_store_attrs
-        cls._store_sagas = []
-        cls._store_reducers = {}
+        if '_store_sagas' not in cls.__dict__:
+            cls._store_sagas = []
+        if '_store_reducers' not in cls.__dict__:
+            cls._store_reducers = {}
 
         for attr in cls._store_merged_attrs:
             setter_action = f"SET_{attr.upper()}"
@@ -104,11 +106,24 @@ class Store:
         type_name = type(self).store_type
         type_registry = Store._store_registry.get(type_name)
         if type_registry is None:
-            Store.log(f"No store registry found for {type_name}, creating")
             type_registry = weakref.WeakValueDictionary()
             Store._store_registry[type_name] = type_registry
 
         type_registry[getattr(self, id_attr)] = self
+
+        # reducers and sagas can be defined up the MRO. Combine
+        # them.
+        all_reducers = {}
+        all_sagas = []
+
+        for base_cls in type(self).mro():
+            if hasattr(base_cls, '_store_reducers'):
+                all_reducers.update({**base_cls._store_reducers})
+            if hasattr(base_cls, '_store_sagas'):
+                all_sagas.extend([*base_cls._store_sagas])
+
+        self._store_reducers = all_reducers
+        self._store_sagas = all_sagas
 
         # STORE_INIT lets this new store get picked up
         # by the inspector
@@ -136,16 +151,16 @@ class Store:
         """
         return None
 
-    def store_setter(self, param_name):
+    async def dispatch_setter(self, param_name, newvalue):
         """
-        Return a bound method that can be called to dispatch a setter
-
-        obj.store_setter(param)(new_value) is equivalent to
-        obj._SET_PARAM(new_value) but doesn't require caller to know
-        how setters are named
+        Shortcut to set a state element to a value
         """
-        setter = getattr(self, f'_SET_{param_name.upper()}')
-        return setter
+        action = Action(
+            self,
+            f'SET_{param_name.upper()}',
+            dict(value=newvalue)
+        )
+        return await self.dispatch(action)
 
     async def dispatch(self, action, previous=None):
         """
@@ -221,7 +236,6 @@ class Store:
     # install reducer for states
     @classmethod
     def install_reducer(cls, action_name, states):
-
         reducer_id = Store._next_reducer_id
         Store._next_reducer_id += 1
 
