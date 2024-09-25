@@ -140,7 +140,7 @@ class Inspector(Thread):
             flags = imgui.WindowFlags_.menu_bar
 
         imgui.begin(
-            "Flopsy Inspector",
+            self.window_name,
             flags=flags,
         )
         if self.needs_focus:
