@@ -219,7 +219,7 @@ class Store:
             launched = asyncio.create_task(task)
         else:
             launched = asyncio.run_coroutine_threadsafe(
-                task, Store._store_asyncio_loop
+                task, Store._store_asyncio_event_loop
             )
 
         # save the new task for later cleanup
@@ -299,7 +299,9 @@ class Store:
     @staticmethod
     def show_inspector(event_loop=None):
         from .inspector.inspector import Inspector
-        inspector = Inspector(event_loop=event_loop)
+        inspector = Inspector(
+            event_loop=event_loop,
+        )
         inspector.start()
         return inspector
 
@@ -312,7 +314,7 @@ class Store:
     @staticmethod
     def setup_asyncio():
         Store._store_asyncio_thread = threading.get_ident()
-        Store._store_asyncio_loop = asyncio.get_event_loop()
+        Store._store_asyncio_event_loop = asyncio.get_event_loop()
 
 
 class SyncedStore (Store):

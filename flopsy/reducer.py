@@ -126,6 +126,12 @@ class reducer:
         setattr(owner, self.method_name, self.func)
         setattr(owner, self.action_name, self.action_name)
 
+        # ... but sometimes it's not exactly the right time 
+        if '_next_reducer_id' not in self.owning_class.__dict__:
+            self.owning_class._next_reducer_id = 1
+        if '_store_reducers' not in self.owning_class.__dict__:
+            self.owning_class._store_reducers = {}
+
         handlers = owner._store_reducers.setdefault(self.action_name, [])
 
         if self.states is None:

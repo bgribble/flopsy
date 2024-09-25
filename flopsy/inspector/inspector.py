@@ -1,23 +1,43 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""
+inspector.py -- state timeline and visualizer
+
+Copyright (c) 2022-2024 Bill Gribble <grib@billgribble.com>
+"""
 import asyncio
+import ctypes
 import json
 import copy
-import sys
+import OpenGL.GL as gl
+from sdl2 import *  # noqa
 from datetime import datetime
 from threading import Thread
-from imgui.integrations.glfw import GlfwRenderer
-import OpenGL.GL as gl
-import glfw
-import imgui
+from imgui_bundle import imgui
 from flopsy.action import Action
 from flopsy.store import Store
+from imgui_bundle.python_backends.sdl_backend import SDL2Renderer
 
 
 class Inspector(Thread):
-    def __init__(self, *, event_loop=None, width=800, height=600):
+    """
+    imgui display for viewing and interacting with state.
+
+    Modeled after the Redux devtools for Chrome.
+
+    Can run its own main loop (using GLFW) in a thread:
+    Inspector().start()
+
+    Or you can integrate it into an existing imgui app
+    by creating an Inspector and calling render()
+    """
+    def __init__(
+        self, *,
+        title="Flopsy inspector",
+        event_loop=None,
+        width=800, height=600
+    ):
         super().__init__()
-        self.window_name = "Flopsy inspector"
+        self.window_name = title
         self.window_width = width
         self.window_height = height
 
@@ -29,12 +49,17 @@ class Inspector(Thread):
         self.timeline = []
 
         self.event_loop = event_loop or asyncio.get_event_loop()
+        self.window = None
+        self.needs_focus = False
 
         self.initial_store = Store.store()
         self.initial_store_ts = datetime.now()
         self.current_store = copy.copy(self.initial_store)
 
         self.store_listen()
+
+    def focus(self):
+        self.needs_focus = True
 
     async def update_timeline(self, store, action, state_diff):
         if action not in [t[1] for t in self.timeline]:
@@ -93,85 +118,64 @@ class Inspector(Thread):
                 new_value = values[1] if incr > 0 else values[0]
                 store_item_content[state_key] = new_value
 
-    def create_glfw_window(self):
-        if not glfw.init():
-            print("Could not initialize OpenGL context")
-            return None
-
-        # OS X supports only forward-compatible core profiles from 3.2
-        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
-        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
-        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-
-        glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, gl.GL_TRUE)
-
-        # Create a windowed mode window and its OpenGL context
-        window = glfw.create_window(
-            int(self.window_width),
-            int(self.window_height),
-            self.window_name,
-            None,
-            None
-        )
-        glfw.make_context_current(window)
-
-        if not window:
-            glfw.terminate()
-            print("Could not initialize Window")
-            return None
-
-        return window
-
-    def imgui_paint(self):
+    def render(self):
+        """
+        render()
+        """
         keep_going = True
 
-        ########################################
-        # global menu bar
-        if imgui.begin_main_menu_bar():
-            if imgui.begin_menu("File"):
+        # one window that fills the workspace
+        imgui.set_next_window_size([self.window_width, self.window_height])
+        imgui.get_style().window_rounding = 0
+        imgui.style_colors_light()
 
-                clicked, enabled = imgui.menu_item("Clear timeline")
+        if self.window:
+            imgui.set_next_window_pos([0, 0])
+            flags = (
+                imgui.WindowFlags_.no_move
+                | imgui.WindowFlags_.always_auto_resize
+                | imgui.WindowFlags_.menu_bar
+            )
+        else:
+            flags = imgui.WindowFlags_.menu_bar
+
+        imgui.begin(
+            "Flopsy Inspector",
+            flags=flags,
+        )
+        if self.needs_focus:
+            imgui.set_window_focus()
+            imgui.set_window_collapsed(False)
+            self.needs_focus = False
+
+        ########################################
+        # menu bar
+        if imgui.begin_menu_bar():
+            if imgui.begin_menu("Inspector"):
+                clicked, _ = imgui.menu_item("Clear timeline", "", False)
                 if clicked:
                     self.timeline = []
                     self.current_store = Store.store()
                     self.timeline_item_selected = None
 
-                clicked, enabled = imgui.menu_item("Follow timeline")
+                clicked, _ = imgui.menu_item("Follow timeline", "", False)
                 if clicked:
                     self.current_store = Store.store()
                     self.timeline_item_selected = None
 
                 # Quit
-                clicked, rest = imgui.menu_item("Quit", "Ctrl+Q")
+                clicked, _ = imgui.menu_item("Close", "Ctrl+w", False)
                 if clicked:
                     keep_going = False
                     self.store_unlisten()
                 imgui.end_menu()
-
-            imgui.end_main_menu_bar()
-
-        # one window that fills the workspace
-        imgui.set_next_window_size(self.window_width, self.window_height-21)
-        imgui.set_next_window_position(0, 21)
-        imgui.get_style().window_rounding = 0
-        imgui.style_colors_light()
-
-        imgui.begin(
-            "Flopsy Inspector",
-            closable=False,
-            flags=imgui.WINDOW_NO_MOVE| imgui.WINDOW_ALWAYS_AUTO_RESIZE,
-        )
+            imgui.end_menu_bar()
 
         ########################################
         # timeline
         halfwidth = imgui.get_window_width() * 0.5
-        fullheight = imgui.get_window_height()
-        imgui.set_next_window_size(halfwidth, fullheight)
-        imgui.set_next_window_position(0, 21)
-        imgui.begin(
-            "Timeline",
-            closable=False,
-            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE|imgui.WINDOW_NO_RESIZE,
+        imgui.begin_child(
+            "Timeline", [halfwidth, 0], True
         )
         items = [
             (
@@ -186,10 +190,10 @@ class Inspector(Thread):
 
         for counter, item in enumerate(items):
             i_label, i_target, i_payload, i_state_diff = item
-            flags = imgui.TREE_NODE_OPEN_ON_DOUBLE_CLICK
+            flags = imgui.TreeNodeFlags_.open_on_double_click
             if self.timeline_item_selected == counter:
-                flags |= imgui.TREE_NODE_SELECTED
-            opened = imgui.tree_node(f"{i_label}##{counter}", flags)
+                flags |= imgui.TreeNodeFlags_.selected
+            opened = imgui.tree_node_ex(f"{i_label}##{counter}", flags)
             if imgui.is_item_clicked():
                 self.update_timeline_selection(counter)
             if opened:
@@ -205,17 +209,13 @@ class Inspector(Thread):
 
                 imgui.tree_pop()
         imgui.end_child()
-
-        imgui.end()
+        imgui.end_child()
 
         ########################################
         # store
-        imgui.set_next_window_size(halfwidth, fullheight)
-        imgui.set_next_window_position(halfwidth, 21)
-        imgui.begin(
-            "Store",
-            closable=False,
-            flags=imgui.WINDOW_NO_COLLAPSE|imgui.WINDOW_NO_MOVE|imgui.WINDOW_NO_RESIZE,
+        imgui.same_line()
+        imgui.begin_child(
+            "Store", [halfwidth, 0], True
         )
 
         if self.timeline_item_selected is not None:
@@ -245,9 +245,11 @@ class Inspector(Thread):
                                 imgui.push_item_width(
                                     0.5 * imgui.get_window_width()
                                 )
-                                changed, self.store_item_selected_value = imgui.input_text(
-                                    "##store_edit_input",
-                                    self.store_item_selected_value
+                                _, self.store_item_selected_value = (
+                                    imgui.input_text(
+                                        "##store_edit_input",
+                                        self.store_item_selected_value
+                                    )
                                 )
                                 imgui.pop_item_width()
                                 imgui.same_line()
@@ -258,7 +260,7 @@ class Inspector(Thread):
                                     )
                                     self.store_item_selected = None
                             else:
-                                selected, _ = imgui.selectable(f"{store_value}")
+                                selected, _ = imgui.selectable(f"{store_value}", False)
                                 if selected:
                                     self.store_item_selected = item_id
                                     self.store_item_selected_value = str(store_value)
@@ -266,39 +268,115 @@ class Inspector(Thread):
                         imgui.tree_pop()
                 imgui.tree_pop()
         imgui.end_child()
-
+        imgui.end_child()
+        self.window_width, self.window_height = imgui.get_window_size()
         imgui.end()
 
-        imgui.end()
         return keep_going
+
+    #####################
+    # main loop routines -- needed if you aren't calling
+    # render() directly from a containing app
+
+    def create_sdl2_window(self, name, width, height):
+        if SDL_Init(SDL_INIT_EVERYTHING) < 0:
+            Store.log(
+                "[sdl2] Error: SDL could not initialize! SDL Error: "
+                + SDL_GetError().decode("utf-8")
+            )
+            return None, None
+
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1)
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24)
+        SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8)
+        SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1)
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1)
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 8)
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG)
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4)
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1)
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE)
+
+        SDL_SetHint(SDL_HINT_MAC_CTRL_CLICK_EMULATE_RIGHT_CLICK, b"1")
+        SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, b"1")
+        SDL_SetHint(SDL_HINT_VIDEODRIVER, b"wayland,x11")
+        SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, b"1")
+        SDL_SetHint(SDL_HINT_APP_NAME, name.encode('utf-8'))
+
+        window = SDL_CreateWindow(
+            name.encode("utf-8"),
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            width,
+            height,
+            SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE,
+        )
+
+        if window is None:
+            Store.log(
+                "[sdl2] Error: Window could not be created! SDL Error: "
+                + SDL_GetError().decode("utf-8")
+            )
+            return None, None
+
+        gl_context = SDL_GL_CreateContext(window)
+        if gl_context is None:
+            Store.log(
+                "[sdl2] Error: Cannot create OpenGL Context! SDL Error: "
+                + SDL_GetError().decode("utf-8")
+            )
+            return None, None
+
+        SDL_GL_MakeCurrent(window, gl_context)
+        if SDL_GL_SetSwapInterval(1) < 0:
+            Store.log(
+                "[sdl2] Error: Unable to set VSync! SDL Error: " + SDL_GetError().decode("utf-8")
+            )
+            return None, None
+        return window, gl_context
 
     def run(self):
         # set up the window and renderer context
-        imgui.create_context()
-        window = self.create_glfw_window()
-        impl = GlfwRenderer(window)
+        ctx = imgui.create_context()
+        imgui.set_current_context(ctx)
+        window, gl_context = self.create_sdl2_window(self.window_name, self.window_width, self.window_height)
+        self.window = window
+        impl = SDL2Renderer(window)
 
         keep_going = True
 
-        while keep_going and not glfw.window_should_close(window):
+        event = SDL_Event()
+        width = ctypes.c_int()
+        height = ctypes.c_int()
+
+        while keep_going:
             # top of loop stuff
-            glfw.poll_events()
+            while SDL_PollEvent(ctypes.byref(event)) != 0:
+                SDL_GetWindowSize(self.window, width, height)
+                w_width = int(width.value)
+                w_height = int(height.value)
+                if w_width != self.window_width or w_height != self.window_height:
+                    self.window_width = w_width
+                    self.window_height = w_height
+
+                if event.type == SDL_QUIT:
+                    keep_going = False
+                impl.process_event(event)
+
             impl.process_inputs()
             imgui.new_frame()
 
-            width, height = glfw.get_window_size(window)
-            self.window_width = width
-            self.window_height = height
-
             # hard work
-            keep_going = self.imgui_paint()
+            keep_going = self.render()
 
             # bottom of loop stuff
             gl.glClearColor(1.0, 1.0, 1.0, 1)
             gl.glClear(gl.GL_COLOR_BUFFER_BIT)
             imgui.render()
             impl.render(imgui.get_draw_data())
-            glfw.swap_buffers(window)
+            SDL_GL_SwapWindow(window)
 
         impl.shutdown()
-        glfw.terminate()
+        SDL_GL_DeleteContext(gl_context)
+        SDL_DestroyWindow(self.window)
+        SDL_Quit()
