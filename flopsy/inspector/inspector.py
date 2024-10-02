@@ -61,19 +61,53 @@ class Inspector(Thread):
     def focus(self):
         self.needs_focus = True
 
-    async def update_timeline(self, store, action, state_diff):
+    def _state_diff(self, from_state, to_state):
+        state_diff = {}
+        for key, value in from_state.items():
+            if key not in to_state:
+                state_diff[key] = (value, None)
+            elif value != to_state.get(key):
+                state_diff[key] = (value, to_state.get(key))
+        new_keys = set(to_state.keys()) - set(from_state.keys())
+        for key in new_keys:
+            state_diff[key] = (None, to_state.get(key))
+        return state_diff
+
+    async def update_timeline(self, store, action, state_diff, previous):
+        """
+        Add an action and state diff to the inspector timeline
+        """
         if action not in [t[1] for t in self.timeline]:
             self.timeline.append([
                 datetime.now(),
                 action,
                 state_diff
             ])
-            if self.timeline_item_selected is None:
-                store_items = self.current_store.setdefault(store.store_type, {})
-                store_item_content = store_items.setdefault(store.id, {})
+            store_items = self.current_store.setdefault(store.store_type, {})
+            store_item_content = store_items.setdefault(store.id, {})
 
+            if self.timeline_item_selected is None:
                 for state_key, values in state_diff.items():
                     store_item_content[state_key] = values[1]
+
+            # check for state consistency
+            check_diff = self._state_diff(
+                {
+                    k: getattr(store, k)
+                    for k in store.store_attrs
+                    if k not in (previous or {})
+                },
+                {
+                    k: v for k, v in store_item_content.items()
+                    if k not in (previous or {})
+                }
+            )
+            if len(check_diff) > 0:
+                self.timeline.append([
+                    datetime.now(),
+                    Action(store, "INCONSISTENT", None),
+                    check_diff
+                ])
         yield None
 
     def store_listen(self):

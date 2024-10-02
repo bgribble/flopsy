@@ -1,8 +1,8 @@
-
 import asyncio
 import logging
 import threading
 import weakref
+from datetime import datetime
 
 from .action import Action
 
@@ -32,6 +32,7 @@ class Store:
     _store_registry = {}
     _store_tasks = []
     _store_types = {}
+    _store_activity_timestamp = None
 
     _store_asyncio_thread = None
     _store_asyncio_event_loop = None
@@ -94,6 +95,8 @@ class Store:
             # define the setter as a method
             if not hasattr(cls, setter_methodname):
                 setattr(cls, setter_methodname, setter_dispatch)
+        Store._store_activity_timestamp = datetime.now()
+
 
     def __init__(self, *args, **kwargs):
         id_attr = getattr(self, "store_id_attr", None)
@@ -124,6 +127,7 @@ class Store:
 
         self._store_reducers = all_reducers
         self._store_sagas = all_sagas
+        Store._store_activity_timestamp = datetime.now()
 
         # STORE_INIT lets this new store get picked up
         # by the inspector
@@ -203,9 +207,10 @@ class Store:
                 continue
             self._launch_task(
                 self._run_saga(
-                    callback(self, action, state_diff)
+                    callback(self, action, state_diff, previous)
                 )
             )
+        Store._store_activity_timestamp = datetime.now()
 
     def _launch_task(self, task):
         # clean up completed tasks
@@ -231,7 +236,10 @@ class Store:
                 if action and isinstance(action, Action):
                     await self.dispatch(action)
         except Exception as e:  # noqa
+            import traceback
             Store.log(f"Exception in saga {saga}: {e}")
+            for l in traceback.format_exception(e):
+                Store.log(l)
 
     # install reducer for states
     @classmethod
@@ -271,6 +279,10 @@ class Store:
             h for h in cls._store_sagas
             if h[0] != saga_id
         ]
+
+    @classmethod
+    def last_activity_time(cls):
+        return cls._store_activity_timestamp or datetime.now()
 
     @staticmethod
     def all_store_types():
