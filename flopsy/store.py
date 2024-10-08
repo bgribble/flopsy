@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import threading
 import weakref
@@ -232,7 +233,12 @@ class Store:
 
     async def _run_saga(self, saga):
         try:
-            async for action in saga:
+            if inspect.isasyncgen(saga):
+                async for action in saga:
+                    if action and isinstance(action, Action):
+                        await self.dispatch(action)
+            elif inspect.isawaitable(saga):
+                action = await saga
                 if action and isinstance(action, Action):
                     await self.dispatch(action)
         except Exception as e:  # noqa
