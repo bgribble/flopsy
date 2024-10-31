@@ -6,9 +6,9 @@ The default SET_ reducer will be used.
 
 @reducer declares that a method is a reducer
 """
-
+from .store import Store
 import inspect
-
+import copy
 
 class mutates:
     """
@@ -26,11 +26,12 @@ class mutates:
 
     def __init__(self, *states):
         self.states = states
+        self.func_name = None
 
     async def _async_wrapper(self, target, prev_values, func_awaitable):
         retval = await func_awaitable
         for state in self.states:
-            new_value = getattr(target, state)
+            new_value = copy.copy(getattr(target, state))
             prev_value = prev_values.get(state, None)
             action = f'SET_{state.upper()}'
             if new_value != prev_value:
@@ -69,6 +70,7 @@ class mutates:
                 s: getattr(instance, s)
                 for s in self.states
             }
+            self.func_name = func.__name__
             retval = func(instance, *args, **kwargs)
             if any(getattr(instance, s) != prev_states[s] for s in self.states):
                 if inspect.isawaitable(retval):
@@ -126,7 +128,7 @@ class reducer:
         setattr(owner, self.method_name, self.func)
         setattr(owner, self.action_name, self.action_name)
 
-        # ... but sometimes it's not exactly the right time 
+        # ... but sometimes it's not exactly the right time
         if '_next_reducer_id' not in self.owning_class.__dict__:
             self.owning_class._next_reducer_id = 1
         if '_store_reducers' not in self.owning_class.__dict__:

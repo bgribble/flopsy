@@ -203,14 +203,19 @@ class Store:
 
         changed_state_set = set(state_diff.keys())
 
-        for callback_id, callback, state_filter in self._store_sagas:
-            if state_filter and not (set(state_filter) & changed_state_set):
+        for callback_id, callback, state_filter, on_store_init in self._store_sagas:
+            if action.type_name == Store.STORE_INIT and not on_store_init:
                 continue
-            self._launch_task(
-                self._run_saga(
-                    callback(self, action, state_diff, previous)
+            if state_filter and not set(state_filter) & changed_state_set:
+                continue
+            callback_res = callback(self, action, state_diff, previous)
+            if (
+                inspect.isasyncgen(callback_res)
+                or inspect.isawaitable(callback_res)
+            ):
+                self._launch_task(
+                    self._run_saga(callback_res, previous)
                 )
-            )
         Store._store_activity_timestamp = datetime.now()
 
     def _launch_task(self, task):
@@ -231,16 +236,16 @@ class Store:
         # save the new task for later cleanup
         Store._store_tasks.append(launched)
 
-    async def _run_saga(self, saga):
+    async def _run_saga(self, saga, previous):
         try:
             if inspect.isasyncgen(saga):
                 async for action in saga:
                     if action and isinstance(action, Action):
-                        await self.dispatch(action)
+                        await self.dispatch(action, previous)
             elif inspect.isawaitable(saga):
                 action = await saga
                 if action and isinstance(action, Action):
-                    await self.dispatch(action)
+                    await self.dispatch(action, previous)
         except Exception as e:  # noqa
             import traceback
             Store.log(f"Exception in saga {saga}: {e}")
@@ -269,14 +274,14 @@ class Store:
         ]
 
     @classmethod
-    def install_saga(cls, saga, states=None):
+    def install_saga(cls, saga, states=None, on_store_init=False):
         saga_id = Store._next_saga_id
         Store._next_saga_id += 1
 
         if not states:
             states = []
 
-        cls._store_sagas.append((saga_id, saga, states))
+        cls._store_sagas.append((saga_id, saga, states, on_store_init))
         return saga_id
 
     @classmethod

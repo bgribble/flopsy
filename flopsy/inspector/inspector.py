@@ -62,6 +62,12 @@ class Inspector(Thread):
         self.needs_focus = True
 
     def _state_diff(self, from_state, to_state):
+        """
+        from_state is actual, to_state is expected
+
+        returns dict of state_name: (actual, expected) where
+        actual is not expected
+        """
         state_diff = {}
         for key, value in from_state.items():
             if key not in to_state:
@@ -73,7 +79,7 @@ class Inspector(Thread):
             state_diff[key] = (None, to_state.get(key))
         return state_diff
 
-    async def update_timeline(self, store, action, state_diff, previous):
+    def update_timeline(self, store, action, state_diff, previous):
         """
         Add an action and state diff to the inspector timeline
         """
@@ -108,12 +114,12 @@ class Inspector(Thread):
                     Action(store, "INCONSISTENT", None),
                     check_diff
                 ])
-        yield None
+        return None
 
     def store_listen(self):
         for store_type in Store.all_store_types():
             self.sagas[store_type.store_type] = store_type.install_saga(
-                self.update_timeline,
+                self.update_timeline, on_store_init=True
             )
 
     def store_unlisten(self):
@@ -218,7 +224,7 @@ class Inspector(Thread):
                 action.payload,
                 state_diff
             )
-            for ts, action, state_diff in self.timeline
+            for ts, action, state_diff in sorted(self.timeline, key=lambda i: i[0])
         ]
         imgui.begin_child("##timeline-list")
 

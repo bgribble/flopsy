@@ -1,5 +1,3 @@
-import logging
-logger = logging.getLogger(__name__)
 
 class saga:
     """
@@ -20,12 +18,13 @@ class saga:
     be run after an action that affects the named state items. If
     there are no args it will get run after any action.
     """
-    def __init__(self, *args):
+    def __init__(self, *args, **kwargs):
         self.owning_class = None
         self.func = None
         self.states = None
         self.action_name = None
         self.method_name = None
+        self.on_store_init = kwargs.get("on_init", False)
 
         # if no args to @reducer
         if len(args) == 1 and callable(args[0]):
@@ -64,5 +63,5 @@ class saga:
 
         saga_id = self.owning_class._next_saga_id
         self.owning_class._next_saga_id += 1
-        self.owning_class._store_sagas.append((saga_id, self, self.states))
+        self.owning_class._store_sagas.append((saga_id, self, self.states, self.on_store_init))
 
