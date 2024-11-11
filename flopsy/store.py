@@ -1,8 +1,9 @@
-
 import asyncio
+import inspect
 import logging
 import threading
 import weakref
+from datetime import datetime
 
 from .action import Action
 
@@ -32,6 +33,7 @@ class Store:
     _store_registry = {}
     _store_tasks = []
     _store_types = {}
+    _store_activity_timestamp = None
 
     _store_asyncio_thread = None
     _store_asyncio_event_loop = None
@@ -72,8 +74,10 @@ class Store:
                     all_store_attrs.append(attr)
 
         cls._store_merged_attrs = all_store_attrs
-        cls._store_sagas = []
-        cls._store_reducers = {}
+        if '_store_sagas' not in cls.__dict__:
+            cls._store_sagas = []
+        if '_store_reducers' not in cls.__dict__:
+            cls._store_reducers = {}
 
         for attr in cls._store_merged_attrs:
             setter_action = f"SET_{attr.upper()}"
@@ -83,14 +87,19 @@ class Store:
             getter_statename = f"{attr.upper()}"
 
             # define the name as a symbol
-            setattr(cls, setter_action, setter_action)
-            setattr(cls, getter_statename, attr)
+            if not hasattr(cls, setter_action):
+                setattr(cls, setter_action, setter_action)
+
+            if not hasattr(cls, getter_statename):
+                setattr(cls, getter_statename, attr)
 
             # define the setter as a method
-            setattr(cls, setter_methodname, setter_dispatch)
+            if not hasattr(cls, setter_methodname):
+                setattr(cls, setter_methodname, setter_dispatch)
+        Store._store_activity_timestamp = datetime.now()
+
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         id_attr = getattr(self, "store_id_attr", None)
         if id_attr is None:
             id_attr = "id"
@@ -101,11 +110,25 @@ class Store:
         type_name = type(self).store_type
         type_registry = Store._store_registry.get(type_name)
         if type_registry is None:
-            Store.log(f"No store registry found for {type_name}, creating")
             type_registry = weakref.WeakValueDictionary()
             Store._store_registry[type_name] = type_registry
 
         type_registry[getattr(self, id_attr)] = self
+
+        # reducers and sagas can be defined up the MRO. Combine
+        # them.
+        all_reducers = {}
+        all_sagas = []
+
+        for base_cls in type(self).mro():
+            if hasattr(base_cls, '_store_reducers'):
+                all_reducers.update({**base_cls._store_reducers})
+            if hasattr(base_cls, '_store_sagas'):
+                all_sagas.extend([*base_cls._store_sagas])
+
+        self._store_reducers = all_reducers
+        self._store_sagas = all_sagas
+        Store._store_activity_timestamp = datetime.now()
 
         # STORE_INIT lets this new store get picked up
         # by the inspector
@@ -132,6 +155,17 @@ class Store:
         Displayed in the inspector along with the ID, if implemented
         """
         return None
+
+    async def dispatch_setter(self, param_name, newvalue):
+        """
+        Shortcut to set a state element to a value
+        """
+        action = Action(
+            self,
+            f'SET_{param_name.upper()}',
+            dict(value=newvalue)
+        )
+        return await self.dispatch(action)
 
     async def dispatch(self, action, previous=None):
         """
@@ -169,14 +203,20 @@ class Store:
 
         changed_state_set = set(state_diff.keys())
 
-        for callback_id, callback, state_filter in self._store_sagas:
-            if state_filter and not (set(state_filter) & changed_state_set):
+        for callback_id, callback, state_filter, on_store_init in self._store_sagas:
+            if action.type_name == Store.STORE_INIT and not on_store_init:
                 continue
-            self._launch_task(
-                self._run_saga(
-                    callback(self, action, state_diff)
+            if state_filter and not set(state_filter) & changed_state_set:
+                continue
+            callback_res = callback(self, action, state_diff, previous)
+            if (
+                inspect.isasyncgen(callback_res)
+                or inspect.isawaitable(callback_res)
+            ):
+                self._launch_task(
+                    self._run_saga(callback_res, previous)
                 )
-            )
+        Store._store_activity_timestamp = datetime.now()
 
     def _launch_task(self, task):
         # clean up completed tasks
@@ -190,24 +230,31 @@ class Store:
             launched = asyncio.create_task(task)
         else:
             launched = asyncio.run_coroutine_threadsafe(
-                task, Store._store_asyncio_loop
+                task, Store._store_asyncio_event_loop
             )
 
         # save the new task for later cleanup
         Store._store_tasks.append(launched)
 
-    async def _run_saga(self, saga):
+    async def _run_saga(self, saga, previous):
         try:
-            async for action in saga:
+            if inspect.isasyncgen(saga):
+                async for action in saga:
+                    if action and isinstance(action, Action):
+                        await self.dispatch(action, previous)
+            elif inspect.isawaitable(saga):
+                action = await saga
                 if action and isinstance(action, Action):
-                    await self.dispatch(action)
+                    await self.dispatch(action, previous)
         except Exception as e:  # noqa
+            import traceback
             Store.log(f"Exception in saga {saga}: {e}")
+            for l in traceback.format_exception(e):
+                Store.log(l)
 
     # install reducer for states
     @classmethod
     def install_reducer(cls, action_name, states):
-
         reducer_id = Store._next_reducer_id
         Store._next_reducer_id += 1
 
@@ -227,14 +274,14 @@ class Store:
         ]
 
     @classmethod
-    def install_saga(cls, saga, states=None):
+    def install_saga(cls, saga, states=None, on_store_init=False):
         saga_id = Store._next_saga_id
         Store._next_saga_id += 1
 
         if not states:
             states = []
 
-        cls._store_sagas.append((saga_id, saga, states))
+        cls._store_sagas.append((saga_id, saga, states, on_store_init))
         return saga_id
 
     @classmethod
@@ -243,6 +290,10 @@ class Store:
             h for h in cls._store_sagas
             if h[0] != saga_id
         ]
+
+    @classmethod
+    def last_activity_time(cls):
+        return cls._store_activity_timestamp or datetime.now()
 
     @staticmethod
     def all_store_types():
@@ -271,7 +322,9 @@ class Store:
     @staticmethod
     def show_inspector(event_loop=None):
         from .inspector.inspector import Inspector
-        inspector = Inspector(event_loop=event_loop)
+        inspector = Inspector(
+            event_loop=event_loop,
+        )
         inspector.start()
         return inspector
 
@@ -284,7 +337,7 @@ class Store:
     @staticmethod
     def setup_asyncio():
         Store._store_asyncio_thread = threading.get_ident()
-        Store._store_asyncio_loop = asyncio.get_event_loop()
+        Store._store_asyncio_event_loop = asyncio.get_event_loop()
 
 
 class SyncedStore (Store):

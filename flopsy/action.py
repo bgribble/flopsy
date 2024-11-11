@@ -8,5 +8,8 @@ class Action:
         self.type_name = type_name
         self.payload = payload
 
+    def __str__(self):
+        return f"<Action {self.type_name} {self.payload}>"
+
     def dispatch(self):
         return self.target.dispatch(self)

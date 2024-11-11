@@ -96,6 +96,7 @@ class UndoableState(Store):
         yield
 
 async def main():
+    Store.setup_asyncio()
     Store.show_inspector()
     await asyncio.sleep(0.5)
     store = UndoableState()

@@ -3,7 +3,7 @@
 # build with 'python ./setup.py install'
 from distutils.core import setup
 
-VERSION = "0.0.4"
+VERSION = "0.0.5"
 
 setup(
     name = 'flopsy',
@@ -16,7 +16,7 @@ setup(
     download_url = f'https://github.com/bgribble/flopsy/archive/refs/tags/v{VERSION}.tar.gz',
     keywords = ['state-management', 'redux', 'saga'],
     install_requires = [
-        'pyopengl', 'glfw', 'imgui[glfw]',
+        'pyopengl', 'glfw', 'imgui_bundle',
     ],
     classifiers = [
         'Development Status :: 3 - Alpha',
