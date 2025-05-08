@@ -126,6 +126,7 @@ class Store:
             if hasattr(base_cls, '_store_sagas'):
                 all_sagas.extend([*base_cls._store_sagas])
 
+        self._state_changes_pending = False
         self._store_reducers = all_reducers
         self._store_sagas = all_sagas
         Store._store_activity_timestamp = datetime.now()
@@ -173,7 +174,6 @@ class Store:
         """
         handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
-
         for callback_id, state_name, cb in handlers:
             old_value = getattr(self, state_name)
             if previous:
@@ -241,11 +241,11 @@ class Store:
             if inspect.isasyncgen(saga):
                 async for action in saga:
                     if action and isinstance(action, Action):
-                        await self.dispatch(action, previous)
+                        await action.target.dispatch(action, previous)
             elif inspect.isawaitable(saga):
                 action = await saga
                 if action and isinstance(action, Action):
-                    await self.dispatch(action, previous)
+                    await action.target.dispatch(action, previous)
         except Exception as e:  # noqa
             import traceback
             Store.log(f"Exception in saga {saga}: {e}")
@@ -282,6 +282,15 @@ class Store:
             states = []
 
         cls._store_sagas.append((saga_id, saga, states, on_store_init))
+
+        # if a saga is added dynamically -- as for the inspector -- need to
+        # manually patch up the existing stores
+        type_registry = Store._store_registry[cls.store_type]
+        for _, store_obj in type_registry.items():
+            store_obj._store_sagas.append(
+                (saga_id, saga, states, on_store_init)
+            )
+
         return saga_id
 
     @classmethod
