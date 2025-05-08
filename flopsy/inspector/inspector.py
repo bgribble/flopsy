@@ -96,24 +96,25 @@ class Inspector(Thread):
                 for state_key, values in state_diff.items():
                     store_item_content[state_key] = values[1]
 
-            # check for state consistency
-            check_diff = self._state_diff(
-                {
-                    k: getattr(store, k)
-                    for k in store.store_attrs
-                    if k not in (previous or {})
-                },
-                {
-                    k: v for k, v in store_item_content.items()
-                    if k not in (previous or {})
-                }
-            )
-            if len(check_diff) > 0:
-                self.timeline.append([
-                    datetime.now(),
-                    Action(store, "INCONSISTENT", None),
-                    check_diff
-                ])
+            if not store._state_changes_pending:
+                # check for state consistency
+                check_diff = self._state_diff(
+                    {
+                        k: getattr(store, k)
+                        for k in store.store_attrs
+                        if k not in (previous or {})
+                    },
+                    {
+                        k: v for k, v in store_item_content.items()
+                        if k not in (previous or {})
+                    }
+                )
+                if len(check_diff) > 0:
+                    self.timeline.append([
+                        datetime.now(),
+                        Action(store, "INCONSISTENT", None),
+                        check_diff
+                    ])
         return None
 
     def store_listen(self):

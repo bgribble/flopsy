@@ -73,9 +73,14 @@ class mutates:
             self.func_name = func.__name__
             retval = func(instance, *args, **kwargs)
             if any(getattr(instance, s) != prev_states[s] for s in self.states):
-                if inspect.isawaitable(retval):
-                    return self._async_wrapper(instance, prev_states, retval)
-                return self._sync_wrapper(instance, prev_states, retval)
+                try:
+                    # silence INCONSISTENT messages from the inspector
+                    instance._state_changes_pending = True
+                    if inspect.isawaitable(retval):
+                        return self._async_wrapper(instance, prev_states, retval)
+                    return self._sync_wrapper(instance, prev_states, retval)
+                finally:
+                    instance._state_changes_pending = False
             return retval
         return wrapper
 
