@@ -15,7 +15,7 @@ from threading import Thread
 from imgui_bundle import imgui
 from flopsy.action import Action
 from flopsy.store import Store
-from imgui_bundle.python_backends.sdl_backend import SDL2Renderer
+from imgui_bundle.python_backends.sdl2_backend import SDL2Renderer
 
 
 class Inspector(Thread):
