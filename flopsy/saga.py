@@ -10,8 +10,8 @@ class saga:
         # this is a saga that runs after all dispatchers
         # for "action". It should be an async generator --
         # that is, an async function that uses yield to
-        # return a sequence of values.
-        pass
+        # return a sequence of values, or None.
+        yield None
 
     if the decorator has args, they are interpreted as the state
     elements that are connected to the saga. The saga will only

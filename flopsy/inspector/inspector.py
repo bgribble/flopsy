@@ -18,6 +18,9 @@ from flopsy.store import Store
 from imgui_bundle.python_backends.sdl2_backend import SDL2Renderer
 
 
+def json_default(obj):
+    return str(obj)
+
 class Inspector(Thread):
     """
     imgui display for viewing and interacting with state.
@@ -230,6 +233,7 @@ class Inspector(Thread):
         imgui.begin_child("##timeline-list")
 
         for counter, item in enumerate(items):
+            imgui.push_id(f"timeline_{counter}")
             i_label, i_target, i_payload, i_state_diff = item
             flags = imgui.TreeNodeFlags_.open_on_double_click
             if self.timeline_item_selected == counter:
@@ -239,16 +243,21 @@ class Inspector(Thread):
                 self.update_timeline_selection(counter)
             if opened:
                 imgui.text(f"Store: {type(i_target).store_type}:{i_target.id}")
-                imgui.text(f"Payload: {json.dumps(i_payload, indent=4)}")
+                payload_txt = json.dumps(i_payload, indent=4, default=json_default)
+
+                imgui.text(f"Payload: {payload_txt}")
 
                 if imgui.tree_node(f"State diff##{counter}"):
                     for store_attr, store_diff in i_state_diff.items():
+                        imgui.push_id("diff_attr")
                         imgui.text(f"{store_attr}:")
                         imgui.same_line()
                         imgui.text(f"{store_diff}")
+                        imgui.pop_id()
                     imgui.tree_pop()
 
                 imgui.tree_pop()
+            imgui.pop_id()
         imgui.end_child()
         imgui.end_child()
 
@@ -275,7 +284,7 @@ class Inspector(Thread):
                 for obj_id, obj_store in store_objmap.items():
                     store_object = Store.find_store(store_type, obj_id)
                     obj_node_name = f"{obj_id}"
-                    if (desc := store_object.description()):
+                    if store_object and (desc := store_object.description()):
                         obj_node_name += f" ({desc})"
                     if imgui.tree_node(obj_node_name):
                         for store_attr, store_value in obj_store.items():

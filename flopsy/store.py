@@ -27,9 +27,10 @@ class Store:
 
     store_id_attr: the attribute to use as a type-unique
     id for the store, to be used when aggregating the
-    application's stores. Defaults to "id"
-
+    application's stores. Defaults to "id". If no attr
+    is provided and no "id" exists, "id" will be created.
     """
+
     _store_registry = {}
     _store_tasks = []
     _store_types = {}
@@ -48,6 +49,7 @@ class Store:
     store_attrs = []
 
     STORE_INIT = "STORE_INIT"
+    STORE_DELETE = "STORE_DELETE"
 
     @classmethod
     def _setter_helper(cls, attr):
@@ -98,14 +100,19 @@ class Store:
                 setattr(cls, setter_methodname, setter_dispatch)
         Store._store_activity_timestamp = datetime.now()
 
-
     def __init__(self, *args, **kwargs):
+        store_type = type(self)
         id_attr = getattr(self, "store_id_attr", None)
-        if id_attr is None:
-            id_attr = "id"
+        if "id" in kwargs:
+            id_value = kwargs.get("id")
+        else:
             id_value = Store._next_default_id
             Store._next_default_id += 1
-            setattr(self, id_attr, id_value)
+
+        if id_attr is None:
+            id_attr = "id"
+
+        setattr(self, id_attr, id_value)
 
         type_name = type(self).store_type
         type_registry = Store._store_registry.get(type_name)
@@ -127,17 +134,42 @@ class Store:
                 all_sagas.extend([*base_cls._store_sagas])
 
         self._state_changes_pending = False
-        self._store_reducers = all_reducers
-        self._store_sagas = all_sagas
+        store_type._store_reducers = all_reducers
+        store_type._store_sagas = all_sagas
         Store._store_activity_timestamp = datetime.now()
 
         # STORE_INIT lets this new store get picked up
         # by the inspector
         self._launch_task(
             self.dispatch(
-                Action(self, Store.STORE_INIT, {})
+                Action(self, Store.STORE_INIT, kwargs)
             )
         )
+
+    def delete(self, **kwargs):
+        store_id = getattr(self, getattr(self, "store_id_attr", "id"))
+        if store_id is not None:
+            type_name = type(self).store_type
+            type_registry = Store._store_registry.get(type_name)
+            if type_registry is not None and store_id in type_registry:
+                del type_registry[store_id]
+
+        self._launch_task(
+            self.dispatch(
+                Action(
+                    self, Store.STORE_DELETE, {
+                        "state_diff": {
+                            k: (v, None) for k, v in self.state().items()
+                        },
+                        **kwargs
+                    }
+                )
+            )
+        )
+
+    def store_id(self):
+        obj_id = getattr(self, getattr(self, "store_id_attr", "id"))
+        return f"{self.store_type}:{obj_id}"
 
     def action(self, action_label, **kwargs):
         return Action(self, action_label, kwargs)
@@ -172,6 +204,7 @@ class Store:
         """
         Dispatch an action to update the store's state
         """
+        print(f"dispatch: {self.store_id()} {action.type_name} {action.payload}")
         handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
         for callback_id, state_name, cb in handlers:
@@ -325,7 +358,10 @@ class Store:
         return complete_state
 
     @staticmethod
-    def find_store(store_type, store_id):
+    def find_store(store_type, store_id=None):
+        if store_id is None:
+            store_type, store_id = store_type.split(':')
+            store_id = int(store_id)
         return Store._store_registry.get(store_type, {}).get(store_id, None)
 
     @staticmethod

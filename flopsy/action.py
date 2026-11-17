@@ -11,5 +11,8 @@ class Action:
     def __str__(self):
         return f"<Action {self.type_name} {self.payload}>"
 
+    def __repr__(self):
+        return f"<Action {self.type_name} {self.payload}>"
+
     def dispatch(self):
         return self.target.dispatch(self)

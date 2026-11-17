@@ -6,6 +6,7 @@ The default SET_ reducer will be used.
 
 @reducer declares that a method is a reducer
 """
+
 from .store import Store
 import inspect
 import copy
@@ -139,10 +140,13 @@ class reducer:
         if '_store_reducers' not in self.owning_class.__dict__:
             self.owning_class._store_reducers = {}
 
-        handlers = owner._store_reducers.setdefault(self.action_name, [])
-
         if self.states is None:
             self.states = self.owning_class.store_attrs
+
+        if not self.states:
+            return
+
+        handlers = owner._store_reducers.setdefault(self.action_name, [])
 
         reducer_id = self.owning_class._next_reducer_id
         self.owning_class._next_reducer_id += 1
