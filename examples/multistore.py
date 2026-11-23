@@ -97,21 +97,6 @@ class UndoHistory(UndoableStore):
     def atom_end(self, action, state, previous):
         return max(0, previous - 1)
 
-    """
-    @reducer('position')
-    def undo(self, action, state, previous):
-        if previous is None:
-            return 1
-        else:
-            return previous + 1
-
-    @reducer('position')
-    def redo(self, action, state, previous):
-        if previous == 0:
-            return None
-        else:
-            return previous - 1
-    """
     @reducer('history')
     def prepend_history(self, action, state, previous):
         value = action.payload.get("value")
@@ -211,10 +196,10 @@ class UndoHistory(UndoableStore):
         xdo_target = Store.find_store(xdo_target_id)
 
         if action.type_name == UndoHistory.UNDO and xdo_action.type_name == Store.STORE_INIT:
-            xdo_target.delete(undoable=False)
+            await xdo_target.delete(undoable=False)
             return
         elif action.type_name == UndoHistory.REDO and xdo_action.type_name == Store.STORE_DELETE:
-            xdo_target.delete(undoable=False)
+            await xdo_target.delete(undoable=False)
             return
 
         if not xdo_target:
@@ -316,7 +301,7 @@ async def main():
         elif line.startswith("delete"):
             store_id = line.split(' ')[1]
             store = Store.find_store(store_id)
-            store.delete()
+            await store.delete()
         elif line.startswith("set"):
             store_id, field, value = line.split(" ", 3)[1:]
             store = Store.find_store(store_id)

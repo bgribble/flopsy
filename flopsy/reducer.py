@@ -32,7 +32,7 @@ class mutates:
     async def _async_wrapper(self, target, prev_values, func_awaitable):
         retval = await func_awaitable
         for state in self.states:
-            new_value = copy.copy(getattr(target, state))
+            new_value = getattr(target, state)
             prev_value = prev_values.get(state, None)
             action = f'SET_{state.upper()}'
             if new_value != prev_value:
@@ -73,12 +73,12 @@ class mutates:
             }
             self.func_name = func.__name__
             retval = func(instance, *args, **kwargs)
+            if inspect.isawaitable(retval):
+                return self._async_wrapper(instance, prev_states, retval)
             if any(getattr(instance, s) != prev_states[s] for s in self.states):
                 try:
                     # silence INCONSISTENT messages from the inspector
                     instance._state_changes_pending = True
-                    if inspect.isawaitable(retval):
-                        return self._async_wrapper(instance, prev_states, retval)
                     return self._sync_wrapper(instance, prev_states, retval)
                 finally:
                     instance._state_changes_pending = False

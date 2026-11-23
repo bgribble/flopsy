@@ -101,6 +101,7 @@ class Store:
         Store._store_activity_timestamp = datetime.now()
 
     def __init__(self, *args, **kwargs):
+        Store.log(f"Store.init {self}")
         store_type = type(self)
         id_attr = getattr(self, "store_id_attr", None)
         if "id" in kwargs:
@@ -146,7 +147,7 @@ class Store:
             )
         )
 
-    def delete(self, **kwargs):
+    async def delete(self, **kwargs):
         store_id = getattr(self, getattr(self, "store_id_attr", "id"))
         if store_id is not None:
             type_name = type(self).store_type
@@ -154,8 +155,7 @@ class Store:
             if type_registry is not None and store_id in type_registry:
                 del type_registry[store_id]
 
-        self._launch_task(
-            self.dispatch(
+            await self.dispatch(
                 Action(
                     self, Store.STORE_DELETE, {
                         "state_diff": {
@@ -165,7 +165,6 @@ class Store:
                     }
                 )
             )
-        )
 
     def store_id(self):
         obj_id = getattr(self, getattr(self, "store_id_attr", "id"))
@@ -204,7 +203,7 @@ class Store:
         """
         Dispatch an action to update the store's state
         """
-        print(f"dispatch: {self.store_id()} {action.type_name} {action.payload}")
+        Store.log(f"dispatch: {self.store_id()} {action.type_name} {action.payload}")
         handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
         for callback_id, state_name, cb in handlers:
@@ -247,7 +246,7 @@ class Store:
                 or inspect.isawaitable(callback_res)
             ):
                 self._launch_task(
-                    self._run_saga(callback_res, previous)
+                    self._run_saga(callback_res)
                 )
         Store._store_activity_timestamp = datetime.now()
 
@@ -269,16 +268,16 @@ class Store:
         # save the new task for later cleanup
         Store._store_tasks.append(launched)
 
-    async def _run_saga(self, saga, previous):
+    async def _run_saga(self, saga):
         try:
             if inspect.isasyncgen(saga):
                 async for action in saga:
                     if action and isinstance(action, Action):
-                        await action.target.dispatch(action, previous)
+                        await action.target.dispatch(action)
             elif inspect.isawaitable(saga):
                 action = await saga
                 if action and isinstance(action, Action):
-                    await action.target.dispatch(action, previous)
+                    await action.target.dispatch(action)
         except Exception as e:  # noqa
             import traceback
             Store.log(f"Exception in saga {saga}: {e}")
