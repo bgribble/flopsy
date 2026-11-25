@@ -1,12 +1,27 @@
+"""
+store.py -- Store base class
+
+When a type inherits from Store, an instance of that class is a
+store of state of that type. This means that in a running app there
+may be mAny stores of different types.
+"""
+from __future__ import annotations
 import asyncio
 import inspect
 import logging
 import threading
 import weakref
 from datetime import datetime
-
+from typing import Awaitable, Callable, Coroutine, Any, AsyncGenerator, AsyncIterator, Dict, List, TYPE_CHECKING
+from concurrent.futures import Future
 from .action import Action
 
+
+if TYPE_CHECKING:
+    from .saga import SagaMethod
+    from .inspector.inspector import Inspector
+
+type StoreTaskAwaitable = None|asyncio.Task[None]|Future[Any]
 
 class Store:
     """
@@ -31,29 +46,34 @@ class Store:
     is provided and no "id" exists, "id" will be created.
     """
 
-    _store_registry = {}
-    _store_tasks = []
-    _store_types = {}
-    _store_activity_timestamp = None
+    _store_registry: Dict[str, Dict[str, Store]] = {}
+    _store_tasks: List[StoreTaskAwaitable]  = []
+    _store_types: Dict[str, type] = {}
+
+    _store_sagas: List[tuple] = []
+    _store_reducers: Dict[str, List[tuple]] = {}
+    _store_subclass_initialized = False
 
     _store_asyncio_thread = None
     _store_asyncio_event_loop = None
+    _store_activity_timestamp: datetime | None = None
 
     _store_logger = None
-    _store_merged_attrs = []
+    _store_merged_attrs: List[str] = []
 
     _next_saga_id = 1
     _next_reducer_id = 1
     _next_default_id = 1
 
-    store_attrs = []
+    store_attrs: List[str] = []
+    store_type: str|None = None
 
     STORE_INIT = "STORE_INIT"
     STORE_DELETE = "STORE_DELETE"
 
     @classmethod
-    def _setter_helper(cls, attr):
-        def inner(self, newval, previous=None):
+    def _setter_helper(cls, attr: str) -> Callable:
+        def inner(self, newval: Any, previous: None | dict = None):
             oldval = getattr(self, attr)
             if previous:
                 oldval = previous.get(attr, oldval)
@@ -69,16 +89,16 @@ class Store:
         if cls.store_type not in Store._store_types:
             Store._store_types[cls.store_type] = cls
 
-        all_store_attrs = [a for a in cls.__dict__.get('store_attrs', [])]
+        all_store_attrs = list(cls.__dict__.get('store_attrs', []))
         for parent_cls in cls.mro():
             if 'store_attrs' in parent_cls.__dict__:
                 for attr in parent_cls.__dict__['store_attrs']:
                     all_store_attrs.append(attr)
 
         cls._store_merged_attrs = all_store_attrs
-        if '_store_sagas' not in cls.__dict__:
+        if not cls._store_sagas:
             cls._store_sagas = []
-        if '_store_reducers' not in cls.__dict__:
+        if not cls._store_reducers:
             cls._store_reducers = {}
 
         for attr in cls._store_merged_attrs:
@@ -101,7 +121,6 @@ class Store:
         Store._store_activity_timestamp = datetime.now()
 
     def __init__(self, *args, **kwargs):
-        Store.log(f"Store.init {self}")
         store_type = type(self)
         id_attr = getattr(self, "store_id_attr", None)
         if "id" in kwargs:
@@ -121,7 +140,7 @@ class Store:
             type_registry = weakref.WeakValueDictionary()
             Store._store_registry[type_name] = type_registry
 
-        type_registry[getattr(self, id_attr)] = self
+        type_registry[str(getattr(self, id_attr))] = self
 
         # reducers and sagas can be defined up the MRO. Combine
         # them.
@@ -129,9 +148,8 @@ class Store:
         all_sagas = []
 
         for base_cls in type(self).mro():
-            if hasattr(base_cls, '_store_reducers'):
+            if issubclass(base_cls, Store):
                 all_reducers.update({**base_cls._store_reducers})
-            if hasattr(base_cls, '_store_sagas'):
                 all_sagas.extend([*base_cls._store_sagas])
 
         self._state_changes_pending = False
@@ -147,10 +165,12 @@ class Store:
             )
         )
 
-    async def delete(self, **kwargs):
-        store_id = getattr(self, getattr(self, "store_id_attr", "id"))
+    async def delete(self, **payload: Any) -> None:
+        store_id = str(getattr(self, getattr(self, "store_id_attr", "id")))
         if store_id is not None:
             type_name = type(self).store_type
+            if type_name is None:
+                return
             type_registry = Store._store_registry.get(type_name)
             if type_registry is not None and store_id in type_registry:
                 del type_registry[store_id]
@@ -161,19 +181,19 @@ class Store:
                         "state_diff": {
                             k: (v, None) for k, v in self.state().items()
                         },
-                        **kwargs
+                        **payload
                     }
                 )
             )
 
-    def store_id(self):
+    def store_id(self) -> str:
         obj_id = getattr(self, getattr(self, "store_id_attr", "id"))
         return f"{self.store_type}:{obj_id}"
 
-    def action(self, action_label, **kwargs):
-        return Action(self, action_label, kwargs)
+    def action(self, action_label: str, **payload: Any) -> Action:
+        return Action(self, action_label, payload)
 
-    def state(self, label=None):
+    def state(self, label: None|str = None) -> Any:
         if not label:
             return {
                 attr: getattr(self, attr)
@@ -181,14 +201,14 @@ class Store:
             }
         return getattr(self, label)
 
-    def description(self):
+    def description(self) -> str:
         """
         Return a short piece of text to describe the store
         Displayed in the inspector along with the ID, if implemented
         """
-        return None
+        return ""
 
-    async def dispatch_setter(self, param_name, newvalue):
+    async def dispatch_setter(self, param_name, newvalue) -> None:
         """
         Shortcut to set a state element to a value
         """
@@ -197,16 +217,15 @@ class Store:
             f'SET_{param_name.upper()}',
             dict(value=newvalue)
         )
-        return await self.dispatch(action)
+        await self.dispatch(action)
 
-    async def dispatch(self, action, previous=None):
+    async def dispatch(self, action, previous=None) -> None:
         """
         Dispatch an action to update the store's state
         """
-        Store.log(f"dispatch: {self.store_id()} {action.type_name} {action.payload}")
         handlers = self._store_reducers.get(action.type_name, [])
         state_diff = {}
-        for callback_id, state_name, cb in handlers:
+        for _, state_name, cb in handlers:
             old_value = getattr(self, state_name)
             if previous:
                 old_value = previous.get(state_name, old_value)
@@ -217,16 +236,16 @@ class Store:
                 state_diff[state_name] = (old_value, new_value)
 
         if not handlers:
-            magic_handler_name = f"_{action.type_name}"
-            if hasattr(type(self), magic_handler_name):
-                magic_handler = getattr(self, magic_handler_name)
+            auto_handler_name = f"_{action.type_name}"
+            if hasattr(type(self), auto_handler_name):
+                auto_handler = getattr(self, auto_handler_name)
                 new_value = action.payload.get("value", None)
-                state_name, old_value = magic_handler(new_value, previous=previous)
+                state_name, old_value = auto_handler(new_value, previous=previous)
                 if old_value != new_value:
                     state_diff[state_name] = (old_value, new_value)
 
-        # STORE_INIT is magic. This is dispatched when a new store
-        # is created, and it needs a state diff that includes the initial
+        # STORE_INIT is dispatched when a new store is created,
+        # and it needs a state diff that includes the initial
         # values of the whole state.
         if action.type_name == Store.STORE_INIT:
             initial_state = action.target.state()
@@ -235,7 +254,7 @@ class Store:
 
         changed_state_set = set(state_diff.keys())
 
-        for callback_id, callback, state_filter, on_store_init in self._store_sagas:
+        for _, callback, state_filter, on_store_init in self._store_sagas:
             if action.type_name == Store.STORE_INIT and not on_store_init:
                 continue
             if state_filter and not set(state_filter) & changed_state_set:
@@ -250,7 +269,7 @@ class Store:
                 )
         Store._store_activity_timestamp = datetime.now()
 
-    def _launch_task(self, task):
+    def _launch_task(self, task: Coroutine[Any, Any, Any]) -> None:
         # clean up completed tasks
         Store._store_tasks = [
             t for t in Store._store_tasks
@@ -258,17 +277,20 @@ class Store:
         ]
 
         # launch the task, if needed
+        launched: StoreTaskAwaitable = None
         if threading.get_ident() == Store._store_asyncio_thread:
             launched = asyncio.create_task(task)
-        else:
+        elif Store._store_asyncio_event_loop:
             launched = asyncio.run_coroutine_threadsafe(
                 task, Store._store_asyncio_event_loop
             )
+        else:
+            return
 
         # save the new task for later cleanup
         Store._store_tasks.append(launched)
 
-    async def _run_saga(self, saga):
+    async def _run_saga(self, saga: Any) -> None:
         try:
             if inspect.isasyncgen(saga):
                 async for action in saga:
@@ -286,7 +308,7 @@ class Store:
 
     # install reducer for states
     @classmethod
-    def install_reducer(cls, action_name, states):
+    def install_reducer(cls, action_name: str, states: List[str]) -> int:
         reducer_id = Store._next_reducer_id
         Store._next_reducer_id += 1
 
@@ -298,7 +320,7 @@ class Store:
         return reducer_id
 
     @classmethod
-    def uninstall_reducer(cls, action_name, reducer_id):
+    def uninstall_reducer(cls, action_name: str, reducer_id: int) -> None:
         handlers = cls._store_reducers.setdefault(action_name, [])
         handlers[:] = [
             h for h in handlers
@@ -306,7 +328,7 @@ class Store:
         ]
 
     @classmethod
-    def install_saga(cls, saga, states=None, on_store_init=False):
+    def install_saga(cls, saga: SagaMethod, states: None | List[str]=None, on_store_init: bool=False):
         saga_id = Store._next_saga_id
         Store._next_saga_id += 1
 
@@ -317,6 +339,9 @@ class Store:
 
         # if a saga is added dynamically -- as for the inspector -- need to
         # manually patch up the existing stores
+        if not cls.store_type:
+            raise ValueError("No store type set")
+
         type_registry = Store._store_registry[cls.store_type]
         for _, store_obj in type_registry.items():
             store_obj._store_sagas.append(
@@ -326,30 +351,30 @@ class Store:
         return saga_id
 
     @classmethod
-    def uninstall_saga(cls, saga_id):
+    def uninstall_saga(cls, saga_id: int) -> None:
         cls._store_sagas = [
             h for h in cls._store_sagas
             if h[0] != saga_id
         ]
 
     @classmethod
-    def last_activity_time(cls):
+    def last_activity_time(cls) -> datetime:
         return cls._store_activity_timestamp or datetime.now()
 
     @staticmethod
-    def all_store_types():
-        return Store._store_types.values()
+    def all_store_types() -> List[type]:
+        return list(Store._store_types.values())
 
     @staticmethod
-    def all_stores():
-        stores = []
+    def all_stores() -> List[Store]:
+        stores: List[Store] = []
         for typename, type_objects in Store._store_registry.items():
             stores = stores + list(type_objects.values())
         return stores
 
     @staticmethod
-    def store():
-        complete_state = {}
+    def store() -> Dict[str, Any]:
+        complete_state: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for typename, type_objects in Store._store_registry.items():
             typereg = complete_state.setdefault(typename, {})
             for obj_id, obj in type_objects.items():
@@ -357,14 +382,13 @@ class Store:
         return complete_state
 
     @staticmethod
-    def find_store(store_type, store_id=None):
+    def find_store(store_type: str, store_id: str|None=None) -> Store|None:
         if store_id is None:
             store_type, store_id = store_type.split(':')
-            store_id = int(store_id)
         return Store._store_registry.get(store_type, {}).get(store_id, None)
 
     @staticmethod
-    def show_inspector(event_loop=None):
+    def show_inspector(event_loop=None) -> Inspector:
         from .inspector.inspector import Inspector
         inspector = Inspector(
             event_loop=event_loop,

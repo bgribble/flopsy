@@ -7,15 +7,22 @@ The default SET_ reducer will be used.
 @reducer declares that a method is a reducer
 """
 
-from .store import Store
 import inspect
-import copy
+from typing import Callable, Awaitable, List, Dict, Any, Coroutine
+
+from .store import Store
+from .action import Action
+
+
+type ReducerMethod = Callable[[Action, str, Any], Any]
+
 
 class mutates:
     """
     class to be used as a decorator for methods that
-    directly change state. I'm not sure if I like this
-    concept but I'm going to give it a try
+    directly change state. It's helpful in migrating an
+    existing app to using Flopsy but should be avoided
+    for new code.
 
     @mutates('myattr')
     def make_some_changes(self):
@@ -25,11 +32,13 @@ class mutates:
     IF newvalue is different from the old value
     """
 
-    def __init__(self, *states):
+    def __init__(self, *states: str):
         self.states = states
         self.func_name = None
 
-    async def _async_wrapper(self, target, prev_values, func_awaitable):
+    async def _async_wrapper(
+        self, target: Store, prev_values: Dict[str, Any], func_awaitable: Awaitable[Any]
+    ) -> Any:
         retval = await func_awaitable
         for state in self.states:
             new_value = getattr(target, state)
@@ -43,11 +52,13 @@ class mutates:
 
         return retval
 
-    async def _async_completion_helper(self, awaitables):
+    async def _async_completion_helper(
+        self, awaitables: List[Coroutine[Any, Any, Any]]
+    ) -> None:
         for a in awaitables:
             await a
 
-    def _sync_wrapper(self, target, prev_values, retval):
+    def _sync_wrapper(self, target: Store, prev_values: Dict[str, Any], retval: Any) -> Any:
         update_awaitables = []
         for state in self.states:
             new_value = getattr(target, state)
@@ -65,7 +76,7 @@ class mutates:
         )
         return retval
 
-    def __call__(self, func):
+    def __call__(self, func: Callable[..., Any]):
         def wrapper(instance, *args, **kwargs):
             prev_states = {
                 s: getattr(instance, s)
@@ -102,18 +113,18 @@ class reducer:
     if the reducer has args, they are interpreted as the
     state elements that this reducer affects.
     """
-    def __init__(self, *args):
-        self.owning_class = None
-        self.func = None
-        self.states = None
-        self.action_name = None
-        self.method_name = None
+    def __init__(self, *args: ReducerMethod | str):
+        self.owning_class: Store|None = None
+        self.func: ReducerMethod|None = None
+        self.states: List[str]|None = None
+        self.action_name: str|None = None
+        self.method_name: str|None = None
 
         # if no args to @reducer
         if len(args) == 1 and callable(args[0]):
             self._assign_func(args[0])
         else:
-            self.states = args
+            self.states = [str(a) for a in args]
 
     def __call__(self, *args, **kwargs):
         if len(args) == 1 and callable(args[0]):
@@ -122,15 +133,19 @@ class reducer:
         else:
             return self.func(*args, **kwargs)
 
-    def _assign_func(self, func):
+    def _assign_func(self, func: ReducerMethod):
         self.func = func
         self.action_name = func.__name__.upper()
         self.method_name = '_' + self.action_name
 
     # __set_name__ gets called because @reducer is a "descriptor",
     # at the right time in the init process
-    def __set_name__(self, owner, name):
+    def __set_name__(self, owner: Store, name: str):
         self.owning_class = owner
+        if self.method_name is None:
+            raise ValueError("No method name set")
+        if self.action_name is None:
+            raise ValueError("No action name set")
         setattr(owner, self.method_name, self.func)
         setattr(owner, self.action_name, self.action_name)
 

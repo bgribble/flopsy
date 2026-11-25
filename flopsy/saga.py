@@ -1,3 +1,20 @@
+"""
+saga.py -- @saga decorator
+
+Sagas are async generators that are started up after
+reducers are dispatched for an action and the store's
+state is updated. They yeild Actions and can run
+indefinitely, similar to RxJS "epics"
+"""
+
+from __future__ import annotations
+from typing import Callable, Awaitable, List, Dict, AsyncIterator, AsyncGenerator, Any, TYPE_CHECKING
+from .action import Action
+
+if TYPE_CHECKING:
+    from .store import Store
+
+type SagaMethod = Callable[[Action, Dict[str, Any], Dict[str, Any]], AsyncGenerator[Action]]
 
 class saga:
     """
@@ -18,19 +35,19 @@ class saga:
     be run after an action that affects the named state items. If
     there are no args it will get run after any action.
     """
-    def __init__(self, *args, **kwargs):
-        self.owning_class = None
-        self.func = None
-        self.states = None
-        self.action_name = None
-        self.method_name = None
-        self.on_store_init = kwargs.get("on_init", False)
+    def __init__(self, *args: SagaMethod | str, **kwargs: Any):
+        self.owning_class: Store|None = None
+        self.func: SagaMethod|None = None
+        self.states: List[str]|None = None
+        self.action_name: str|None = None
+        self.method_name: str|None = None
+        self.on_store_init: bool = kwargs.get("on_init", False)
 
         # if no args to @reducer
         if len(args) == 1 and callable(args[0]):
             self._assign_func(args[0])
         else:
-            self.states = args
+            self.states = [str(a) for a in args]
 
     def __call__(self, *args, **kwargs):
         if len(args) == 1 and callable(args[0]):
@@ -39,17 +56,20 @@ class saga:
         else:
             return self.func(*args, **kwargs)
 
-    def _assign_func(self, func):
+    def _assign_func(self, func: SagaMethod):
         self.func = func
         self.action_name = func.__name__.upper()
         self.method_name = '_' + self.action_name
 
     # __set_name__ gets called because @saga is a "descriptor",
     # at the right time in the init process.
-    def __set_name__(self, owner, name):
+    def __set_name__(self, owner: Store, name: str):
         from .store import Store
 
         self.owning_class = owner
+        if self.method_name is None or self.action_name is None:
+            return
+
         setattr(owner, self.method_name, self.func)
         setattr(owner, self.action_name, self.action_name)
 
@@ -63,5 +83,7 @@ class saga:
 
         saga_id = self.owning_class._next_saga_id
         self.owning_class._next_saga_id += 1
+        saga_handler: SagaMethod = self
+
         self.owning_class._store_sagas.append((saga_id, self, self.states, self.on_store_init))
 
