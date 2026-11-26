@@ -290,6 +290,17 @@ class Store:
         # save the new task for later cleanup
         Store._store_tasks.append(launched)
 
+    @staticmethod
+    async def drain_tasks():
+        while(Store._store_tasks):
+            await Store._store_tasks[0]
+
+            Store._store_tasks = [
+                t for t in Store._store_tasks
+                if t and not t.done()
+            ]
+
+
     async def _run_saga(self, saga: Any) -> None:
         try:
             if inspect.isasyncgen(saga):
@@ -406,6 +417,11 @@ class Store:
     def setup_asyncio():
         Store._store_asyncio_thread = threading.get_ident()
         Store._store_asyncio_event_loop = asyncio.get_event_loop()
+
+    @staticmethod
+    def flush_registry():
+        Store._store_types = {}
+        Store._store_registry = {}
 
 
 class SyncedStore (Store):
