@@ -1,0 +1,14 @@
+include LICENSE.txt
+include README.md
+include pyproject.toml
+include setup.cfg
+include setup.py
+include MANIFEST.in
+recursive-include flopsy *.py
+prune build
+prune dist
+prune flopsy.egg-info
+prune .git
+prune .mypy_cache
+prune .pytest_cache
+prune __pycache__
